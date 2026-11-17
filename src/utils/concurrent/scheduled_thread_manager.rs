@@ -19,20 +19,16 @@ use crate::utils::concurrent::{ThreadPoolProvider, lazy};
 use std::sync::Arc;
 use std::{io, thread};
 
-/// Acts as a manager for multiple shards, each shard is created by the provided [`ThreadManagerFactory`].
+/// Acts as a manager for multiple shards. Each shard is created by the [`ThreadManagerFactory`].
 pub struct ScheduledThreadManager<T> {
     provider: Arc<dyn ThreadPoolProvider<T>>,
     shards_total: usize,
 }
 
 impl<T: Send + Sync + 'static> ScheduledThreadManager<T> {
-    /// Creates a new instance.
+    /// Creates `shards_total` shards, each one with the `factory`.
     ///
-    /// # Arguments
-    ///
-    /// - `shards_total` — The total amount of shards this [`ScheduledThreadManager`] should use. If this is set to
-    ///   `0` libev will automatically use `2 *` [`available_parallelism`] shards.
-    /// - `factory` — The [`ThreadManagerFactory`] used to create each shard
+    /// If `shards_total` is 0, libev will select the number of shards automatically: `2 *` [`available_parallelism`].
     ///
     /// # Errors
     ///
@@ -52,12 +48,6 @@ impl<T: Send + Sync + 'static> ScheduledThreadManager<T> {
         })
     }
 
-    /// Creates the instance with the provided amount of shards.
-    ///
-    /// # Arguments
-    ///
-    /// - `factory` — The [`ThreadManagerFactory`] used to create each shard
-    /// - `shards_total` — The total amount of shards
     fn create<C>(factory: C, shards_total: usize) -> io::Result<Self>
     where
         C: ThreadManagerFactory<ThreadManager = T>,
@@ -74,13 +64,7 @@ impl<T: Send + Sync + 'static> ScheduledThreadManager<T> {
         })
     }
 
-    /// Returns one of the shards managed by this [`ScheduledThreadManager`].
-    ///
-    /// The shards are provided in order, starting again with the first shard after the last one.
-    ///
-    /// # See also
-    ///
-    /// - [`shards`](Self::shards)
+    /// Returns one of the shards managed by this [`ScheduledThreadManager`], in round-robin order.
     pub fn provide(&self) -> &T {
         self.provider.provide()
     }
@@ -90,7 +74,7 @@ impl<T: Send + Sync + 'static> ScheduledThreadManager<T> {
         self.provider.shards()
     }
 
-    /// Returns the amount of shards managed by this [`ScheduledThreadManager`].
+    /// Returns the number of shards managed by this [`ScheduledThreadManager`].
     pub fn shards_total(&self) -> usize {
         self.shards_total
     }
@@ -105,7 +89,6 @@ impl<T> Clone for ScheduledThreadManager<T> {
     }
 }
 
-/// The default amount of shards: `2 *` [`available_parallelism`](thread::available_parallelism).
 fn retrieve_shard_total() -> usize {
     thread::available_parallelism().map_or(1, |n| n.get()) * 2
 }

@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-//! Configurations of a [`SocketManager`](crate::SocketManager), which are created by the
-//! [`DefaultSocketManagerBuilder`](crate::DefaultSocketManagerBuilder).
 mod threading_config;
 pub use threading_config::ThreadingConfig;
 mod socket_config;

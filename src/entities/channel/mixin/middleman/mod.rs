@@ -14,6 +14,5 @@
  * limitations under the License.
  */
 
-//! Implementations for higher-level features in socket channels, such as sending messages.
 mod message_channel_mixin;
 pub use message_channel_mixin::MessageChannelMixin;

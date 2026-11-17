@@ -17,7 +17,7 @@
 use crate::handle::SocketQueueFactory;
 use crate::handle::SocketQueueManager;
 
-/// IO handler which uses I/O completion ports (IOCP) under the covers. Only works on Windows!
+/// IO handler which uses IO completion ports (IOCP) under the covers. Only works on Windows!
 pub struct IocpHandler;
 
 impl IocpHandler {

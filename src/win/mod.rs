@@ -38,67 +38,16 @@ pub mod transport {
     pub use super::iocp_handler::IocpHandler;
 }
 
-/// The default IO handler on Windows.
-///
-/// This handler uses IOCP, see [`IocpHandler`](iocp_handler::IocpHandler).
 pub(crate) type DefaultHandler = iocp_handler::IocpHandler;
 
-/// Returns the socket of the provided connection.
-///
-/// This socket is registered with the [`ChannelManager`](crate::handle::ChannelManager) as the
-/// [`socket`](crate::handle::SocketHandler::socket) of a channel.
-///
-/// # Arguments
-///
-/// - `stream` — The connection
 pub(crate) fn as_socket(stream: &TcpStream) -> BorrowedSocket<'_> {
     stream.as_socket()
 }
 
-/// Registers the [`SessionController`] of the provided socket with the provided thread manager.
-///
-/// The returned [`Receiver`] gets the result once the [`SessionController`] has been registered, which also starts to
-/// accept connections. The accepted connections are registered with the [worker pool](SocketManager::worker_pool).
-///
-/// # Arguments
-///
-/// - `pool` — The thread manager to use
-/// - `listener` — The bound socket
-/// - `socket_manager` — The [`SocketManager`] to use
-///
-/// # Returns
-///
-/// The [`Receiver`] of the result.
-///
-/// # See also
-///
-/// - [`connect`]
-/// - [`SessionController`]
 pub(crate) fn bind(pool: &SingleThreadManager, listener: TcpListener, socket_manager: SocketManager) -> Receiver<io::Result<()>> {
     pool.register(move || Box::new(SessionController::new(listener, socket_manager)))
 }
 
-/// Registers a new [`SocketChannel`] with the provided thread manager, which connects to the provided address.
-///
-/// The returned [`Receiver`] gets the result once the [`SocketChannel`] has been registered and has started to
-/// connect, or the error if it could not start to connect. The connection is established later, or the channel is
-/// closed once the [connect timeout](SocketManager::connect_timeout) has expired.
-///
-/// # Arguments
-///
-/// - `pool` — The thread manager to use
-/// - `socket` — The new socket, see [`socket::client`]
-/// - `address` — The address to connect to
-/// - `socket_manager` — The [`SocketManager`] to use
-///
-/// # Returns
-///
-/// The [`Receiver`] of the result.
-///
-/// # See also
-///
-/// - [`bind`]
-/// - [`SocketChannel::connect`]
 pub(crate) fn connect(
     pool: &SingleThreadManager,
     socket: TcpStream,

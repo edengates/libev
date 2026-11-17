@@ -17,7 +17,7 @@
 //! Every [`MessageChannel`] has its registered [`ListenerAdapter`]s that deal with the handling and forwarding of
 //! [`GenericEvent`]s.
 //!
-//! **Note: All of the [`ListenerAdapter`]s of a [`MessageChannel`] are single-threaded.**
+//! All of the [`ListenerAdapter`]s of a [`MessageChannel`] are single-threaded.
 //!
 //! [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
 //! [`GenericEvent`]: crate::events::GenericEvent

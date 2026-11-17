@@ -25,20 +25,6 @@ use std::io;
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::rc::Rc;
 
-/// A socket channel on Windows, which uses the operations of the
-/// [`SocketQueueManager`](crate::handle::SocketQueueManager).
-///
-/// A channel is either created for a connection, which has been accepted by the
-/// [`SessionController`](crate::handle::SessionController), or with [`connect`](Self::connect) for a connection, which
-/// is established with `ConnectEx`. To read, a read operation without any buffer is scheduled. Once this operation
-/// has completed, the available bytes are received from the socket at once, see [`read`](Self::read).
-///
-/// **Note:** Once the channel is dropped, the output of the socket is shut down and the socket is closed.
-///
-/// # See also
-///
-/// - [`SocketChannelMixin`]
-/// - [`SessionController`](crate::handle::SessionController)
 pub struct SocketChannel {
     socket: TcpStream,
     channel: Rc<MessageChannelMixin>,
@@ -54,19 +40,6 @@ impl Drop for SocketChannel {
 }
 
 impl SocketChannel {
-    /// Creates a new instance for the provided connection.
-    ///
-    /// This is used for an accepted connection, which is ready once the channel has been registered with the
-    /// [`ChannelManager`].
-    ///
-    /// # Arguments
-    ///
-    /// - `socket` — The accepted connection
-    /// - `socket_manager` — The [`SocketManager`] to use
-    ///
-    /// # See also
-    ///
-    /// - [`connect`](Self::connect)
     pub(crate) fn new(
         socket: TcpStream,
         socket_manager: SocketManager,
@@ -80,21 +53,6 @@ impl SocketChannel {
         }
     }
 
-    /// Creates a new instance, which connects to the provided address.
-    ///
-    /// The channel starts to connect once it has been registered with the [`ChannelManager`]. If the connection
-    /// has not been established once the [connect timeout](SocketManager::connect_timeout) has expired, the channel
-    /// is closed.
-    ///
-    /// # Arguments
-    ///
-    /// - `socket` — The new socket, see [`socket::client`]
-    /// - `address` — The address to connect to
-    /// - `socket_manager` — The [`SocketManager`] to use
-    ///
-    /// # See also
-    ///
-    /// - [`new`](Self::new)
     pub(crate) fn connect(
         socket: TcpStream,
         address: SocketAddr,
@@ -105,33 +63,6 @@ impl SocketChannel {
         channel
     }
 
-    /// Receives all available messages, after the read operation has completed.
-    ///
-    /// Each message has up to [`buffer_size`](SocketManager::buffer_size) bytes and is passed to the listeners, then
-    /// the next messages are sent. No more messages are received once:
-    /// - no more bytes are available
-    /// - [`chunk_limit`](SocketManager::chunk_limit) messages have been received
-    /// - a message has less bytes than the buffer
-    /// - or the listeners are running or the channel is shutdown or deafened
-    ///
-    /// Then [`execute`](SocketHandler::execute) is called, which schedules the next read operation if needed.
-    ///
-    /// If the remote has closed the connection, the queue of pending messages is shut down, so the channel is closed
-    /// once the messages, which are ready to be sent, have been sent. If the bytes could not be received, the channel
-    /// is closed at once.
-    ///
-    /// # Arguments
-    ///
-    /// - `manager` — The [`ChannelManager`] of this channel
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the next operation could not be started. The channel is closed in this case.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the channel should stay registered, or `false` if the channel should be closed, see
-    /// [`complete`](SocketChannelMixin::complete).
     fn read(&mut self, manager: &mut ChannelManager) -> io::Result<bool> {
         self.receiving = false;
         let buffer_size = self.channel.socket_manager().buffer_size();

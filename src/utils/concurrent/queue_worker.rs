@@ -24,12 +24,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
-/// A task of a listener, which will be handled again each time it can continue, until it has finished.
 pub type WorkTask = Pin<Box<dyn Future<Output = ()>>>;
 
-/// Used to schedule tasks and to handle the pending tasks of the listeners.
-///
-/// The scheduled tasks are called with `M`, the manager which uses this [`QueueWorker`].
 pub struct QueueWorker<M> {
     scheduled_tasks: BTreeMap<(Instant, usize), Box<dyn FnOnce(&mut M) + Send>>,
     sequence: usize,
@@ -41,7 +37,6 @@ pub struct QueueWorker<M> {
 }
 
 impl<M> QueueWorker<M> {
-    /// Creates a new instance.
     pub(crate) fn new() -> Self {
         let (sender, receiver) = mpsc::channel();
         Self {
@@ -55,20 +50,6 @@ impl<M> QueueWorker<M> {
         }
     }
 
-    /// Schedules the task to be executed after the specified delay.
-    ///
-    /// # Arguments
-    ///
-    /// - `delay` — The delay after which the task is executed
-    /// - `task` — The task to execute
-    ///
-    /// # Returns
-    ///
-    /// The identifier of the scheduled task.
-    ///
-    /// # See also
-    ///
-    /// - [`next`](Self::next)
     pub(crate) fn schedule(&mut self, delay: Duration, task: Box<dyn FnOnce(&mut M) + Send>) -> (Instant, usize) {
         let worker_handle = (Instant::now() + delay, self.sequence);
         self.scheduled_tasks.insert(worker_handle, task);
@@ -76,7 +57,6 @@ impl<M> QueueWorker<M> {
         worker_handle
     }
 
-    /// The amount of time in milliseconds until the next scheduled task, or `u32::MAX` if there is no scheduled task.
     pub(crate) fn timeout(&self) -> u32 {
         match self.scheduled_tasks.first_key_value() {
             Some(((deadline, _), _)) => {
@@ -87,11 +67,6 @@ impl<M> QueueWorker<M> {
         }
     }
 
-    /// Returns the next scheduled task, if the specified time has been reached.
-    ///
-    /// # Arguments
-    ///
-    /// - `now` — The current time
     pub(crate) fn next(&mut self, now: Instant) -> Option<Box<dyn FnOnce(&mut M) + Send>> {
         let entry = self.scheduled_tasks.first_entry()?;
         if entry.key().0 > now {
@@ -100,19 +75,6 @@ impl<M> QueueWorker<M> {
         Some(entry.remove())
     }
 
-    /// Schedules a task for the provided socket to be executed after the specified delay.
-    ///
-    /// This replaces the previous task of the socket, which is used to keep the connection alive.
-    ///
-    /// # Arguments
-    ///
-    /// - `key` — The key of the socket
-    /// - `delay` — The delay after which the task is executed
-    /// - `task` — The task to execute
-    ///
-    /// # See also
-    ///
-    /// - [`stop_keep_alive`](Self::stop_keep_alive)
     pub(crate) fn setup_keep_alive(&mut self, key: usize, delay: Duration, task: Box<dyn FnOnce(&mut M) + Send>) {
         let worker_handle = self.schedule(delay, task);
         if let Some(old_keep_alive) = self.keep_alive_handles.insert(key, worker_handle) {
@@ -120,35 +82,12 @@ impl<M> QueueWorker<M> {
         }
     }
 
-    /// Cancels the scheduled task of the provided socket, which is used to keep the connection alive.
-    ///
-    /// # Arguments
-    ///
-    /// - `key` — The key of the socket
-    ///
-    /// # See also
-    ///
-    /// - [`setup_keep_alive`](Self::setup_keep_alive)
     pub(crate) fn stop_keep_alive(&mut self, key: usize) {
         if let Some(worker_handle) = self.keep_alive_handles.remove(&key) {
             self.scheduled_tasks.remove(&worker_handle);
         }
     }
 
-    /// Handles the provided task once, and stores it if it has not finished yet.
-    ///
-    /// The `waker` closure creates the [`Waker`] of the task with the identifier of the task and the [`Sender`], to
-    /// which the identifier is sent each time the task can continue.
-    ///
-    /// # Arguments
-    ///
-    /// - `task` — The [`WorkTask`] to handle
-    /// - `socket_id` — The key of the socket of the task
-    /// - `waker` — The closure, which creates the [`Waker`] of the task
-    ///
-    /// # See also
-    ///
-    /// - [`run_pending_tasks`](Self::run_pending_tasks)
     pub(crate) fn enqueue<W>(&mut self, mut task: WorkTask, socket_id: usize, waker: W)
     where
         W: FnOnce(usize, &Sender<usize>) -> Waker,
@@ -161,15 +100,6 @@ impl<M> QueueWorker<M> {
         }
     }
 
-    /// Handles all pending tasks, which can continue.
-    ///
-    /// # Returns
-    ///
-    /// The socket of each handled task, with `false` if the task has failed.
-    ///
-    /// # See also
-    ///
-    /// - [`enqueue`](Self::enqueue)
     pub(crate) fn run_pending_tasks(&mut self) -> Vec<(usize, bool)> {
         let mut sockets = Vec::new();
         let queued: Vec<usize> = self.receiver.try_iter().collect();
@@ -193,16 +123,10 @@ impl<M> QueueWorker<M> {
         sockets
     }
 
-    /// Cancels all pending tasks of the provided socket.
-    ///
-    /// # Arguments
-    ///
-    /// - `key` — The key of the socket
     pub(crate) fn cancel(&mut self, key: usize) {
         self.pending_tasks.retain(|_, (_, _, socket_id)| *socket_id != key);
     }
 
-    /// Returns `true` if there are no pending tasks.
     pub(crate) fn is_empty(&self) -> bool {
         self.pending_tasks.is_empty()
     }

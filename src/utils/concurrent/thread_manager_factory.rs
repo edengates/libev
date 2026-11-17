@@ -17,37 +17,20 @@
 use crate::utils::concurrent::ElasticThreadManager;
 use std::io;
 
-/// Factory interface for the creation of new thread manager objects.
+/// Factory interface for the creation of new shards.
 ///
-/// By default, uses [`SingleThreadFactory`] for the creation of its thread managers.
-///
-/// Implementations of this interface are provided to [`ScheduledThreadManager::new`].
-///
-/// # See also
-///
-/// - [`SingleThreadFactory`]
-/// - [`ScheduledThreadManager::new`]
+/// Implementations are passed to [`ScheduledThreadManager::new`], by default it is a [`SingleThreadFactory`].
 ///
 /// [`SingleThreadFactory`]: crate::utils::concurrent::SingleThreadFactory
 /// [`ScheduledThreadManager::new`]: crate::utils::concurrent::ScheduledThreadManager::new
 pub trait ThreadManagerFactory {
     type ThreadManager;
 
-    /// Creates a new [`ThreadManager`](Self::ThreadManager) instance with the specified [`ElasticThreadManager`].
-    ///
-    /// The [`ScheduledThreadManager`] will call this for each shard.
-    ///
-    /// # Arguments
-    ///
-    /// - `manager` — The [`ElasticThreadManager`] that is used for dispatching the work
+    /// Called by the [`ScheduledThreadManager`] once for each shard. The `manager` is used for dispatching the work.
     ///
     /// # Errors
     ///
-    /// Returns an error if the [`ThreadManager`](Self::ThreadManager) could not be created.
-    ///
-    /// # Returns
-    ///
-    /// The newly constructed [`ThreadManager`](Self::ThreadManager).
+    /// An error here makes [`ScheduledThreadManager::new`](crate::utils::concurrent::ScheduledThreadManager::new) fail.
     ///
     /// [`ScheduledThreadManager`]: crate::utils::concurrent::ScheduledThreadManager
     fn new_manager(&self, manager: &ElasticThreadManager) -> io::Result<Self::ThreadManager>;

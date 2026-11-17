@@ -22,9 +22,7 @@ use std::task::{Context, Poll, Waker};
 
 /// Specialized [`Future`] used in combination with a scheduler.
 ///
-/// # See also
-///
-/// - [`SingleThreadManager::delay`](crate::utils::concurrent::SingleThreadManager::delay)
+/// See [`SingleThreadManager::delay`](crate::utils::concurrent::SingleThreadManager::delay).
 #[derive(Clone)]
 pub struct DelayedCompletableFuture {
     done: Arc<AtomicBool>,
@@ -32,7 +30,6 @@ pub struct DelayedCompletableFuture {
 }
 
 impl DelayedCompletableFuture {
-    /// Creates a new future, which has not completed yet.
     pub(crate) fn new() -> Self {
         Self {
             done: Arc::new(AtomicBool::new(false)),
@@ -40,7 +37,6 @@ impl DelayedCompletableFuture {
         }
     }
 
-    /// Completes this future and wakes up the task associated with it.
     pub(crate) fn complete(&self) {
         self.done.store(true, Ordering::Release);
         if let Some(waker) = self.future.lock().unwrap_or_else(PoisonError::into_inner).take() {
@@ -48,9 +44,6 @@ impl DelayedCompletableFuture {
         }
     }
 
-    /// Whether the future is completed.
-    ///
-    /// Returns `true`, if the future has completed.
     fn is_done(&self) -> bool {
         self.done.load(Ordering::Acquire)
     }

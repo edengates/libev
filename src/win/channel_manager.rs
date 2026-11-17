@@ -24,34 +24,12 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::windows::io::AsRawSocket;
 use windows_sys::Win32::System::IO::OVERLAPPED_ENTRY;
 
-/// The state of the [`ChannelManager`] on Windows.
-///
-/// It holds the completed operations of the [`SocketQueueManager`] and the amount of operations, which have not
-/// completed yet.
-///
-/// Each operation, which has been started with one of the following methods, is counted until its [`SocketPacket`]
-/// has been returned by the [`SocketQueueManager`]:
-/// - [`read`](ChannelManager::read)
-/// - [`write`](ChannelManager::write)
-/// - [`accept`](ChannelManager::accept)
-/// - [`connect`](ChannelManager::connect)
-///
-/// On [`close`](ChannelManager::close) this amount is used to wait for each pending operation, as the packet of an
-/// operation **must not** be released *before* the operation has completed.
 pub struct ChannelState {
     pub(in crate::handle) entries: Vec<OVERLAPPED_ENTRY>,
     pub(in crate::handle) response_total: usize,
 }
 
 impl ChannelState {
-    /// Creates a new instance, which handles up to `capacity` events at once.
-    ///
-    /// **Note:** At least one event is handled at once, even if `capacity` is `0`.
-    ///
-    /// # Arguments
-    ///
-    /// - `_port` — The [`SocketQueueManager`] of the [`ChannelManager`]
-    /// - `capacity` — The maximum amount of events, which are handled at once
     pub(crate) fn new(_port: &SocketQueueManager, capacity: usize) -> Self {
         Self {
             entries: vec![unsafe { mem::zeroed() }; capacity.max(1)],
@@ -61,21 +39,6 @@ impl ChannelState {
 }
 
 impl ChannelManager {
-    /// Blocks the current thread until the next operations have completed or the next scheduled task is ready.
-    ///
-    /// Each completed operation is handled by the [`SocketHandler`] of its identifier, see
-    /// [`handle`](Self::handle). If no task has been scheduled, the current thread is blocked until an operation has
-    /// completed or an identifier has been sent with [`SocketQueueManager::enqueue`]. Up to the capacity of the
-    /// [`ChannelState`] operations are handled at once, the remaining operations are handled with the next call.
-    ///
-    /// # Errors
-    ///
-    /// Returns the error of the [`SocketQueueManager`], in this case no operation is handled.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketQueueManager::poll`]
-    /// - [`execute`](ChannelManager::execute)
     pub(crate) fn run_worker(&mut self) -> io::Result<()> {
         let mut entries = mem::take(&mut self.state.entries);
         let data = self.port.poll(&mut entries, self.worker.timeout());
@@ -88,130 +51,30 @@ impl ChannelManager {
         data.map(|_| ())
     }
 
-    /// Schedules a read operation for the provided socket with the provided packet.
-    ///
-    /// The socket **must** be registered with the [`SocketQueueManager`] of this instance. The packet is held by the
-    /// operation until it has completed, then it is given to the [`SocketHandler`] of the socket. A packet without
-    /// buffer, see [`SocketPacket::new`], does **not** receive any bytes, the operation **only** completes once bytes
-    /// can be received.
-    ///
-    /// # Arguments
-    ///
-    /// - `socket` — The registered socket
-    /// - `packet` — The [`SocketPacket`], which receives the bytes
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the operation could not be started, the packet is released in this case.
-    ///
-    /// # See also
-    ///
-    /// - [`write`](Self::write)
-    /// - [`socket_packet::read`]
     pub fn read<S: AsRawSocket>(&mut self, socket: &S, packet: Box<SocketPacket>) -> io::Result<()> {
         socket_packet::read(socket, packet)?;
         self.state.response_total += 1;
         Ok(())
     }
 
-    /// Schedules a write operation for the provided socket with the provided packet.
-    ///
-    /// The socket **must** be registered with the [`SocketQueueManager`] of this instance. The packet is held by the
-    /// operation until it has completed. If only a part of the bytes has been sent, the operation is started again
-    /// with the remaining bytes, so the [`SocketHandler`] of the socket gets the packet **only** once **all** bytes
-    /// have been sent or the operation has failed.
-    ///
-    /// # Arguments
-    ///
-    /// - `socket` — The registered socket
-    /// - `packet` — The [`SocketPacket`] with the bytes to send
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the operation could not be started, the packet is released in this case.
-    ///
-    /// # See also
-    ///
-    /// - [`read`](Self::read)
-    /// - [`socket_packet::write`](fn@socket_packet::write)
     pub fn write<S: AsRawSocket>(&mut self, socket: &S, packet: Box<SocketPacket>) -> io::Result<()> {
         socket_packet::write(socket, packet)?;
         self.state.response_total += 1;
         Ok(())
     }
 
-    /// Schedules an accept operation for the provided socket.
-    ///
-    /// The socket **must** be registered with the [`SocketQueueManager`] of this instance. A new socket for the
-    /// connection is created and held by the packet of the operation. Once the operation has completed, the
-    /// connection can be retrieved with [`socket_packet::accepted`].
-    ///
-    /// # Arguments
-    ///
-    /// - `listener` — The registered and bound socket
-    ///
-    /// # Errors
-    ///
-    /// Returns an error:
-    /// - If the new socket could not be created
-    /// - If the operation could not be started
-    ///
-    /// # See also
-    ///
-    /// - [`SessionController`](crate::handle::SessionController)
     pub fn accept(&mut self, listener: &TcpListener) -> io::Result<()> {
         socket_packet::accept(listener)?;
         self.state.response_total += 1;
         Ok(())
     }
 
-    /// Schedules a connect operation to the provided address.
-    ///
-    /// The socket **must** be registered with the [`SocketQueueManager`] of this instance and **must not** be bound
-    /// yet, it is bound to any local address *before* the operation is started. Once the operation has completed,
-    /// [`socket::connected`](crate::handle::socket::connected) **must** be called *before* the socket can be used.
-    ///
-    /// # Arguments
-    ///
-    /// - `stream` — The registered socket, which is not bound yet
-    /// - `address` — The address to connect to
-    ///
-    /// # Errors
-    ///
-    /// Returns an error:
-    /// - If the socket could not be bound
-    /// - If the operation could not be started
-    ///
-    /// # See also
-    ///
-    /// - [`socket::client`](crate::handle::socket::client)
-    /// - [`socket_packet::connect`]
     pub fn connect(&mut self, stream: &TcpStream, address: &SocketAddr) -> io::Result<()> {
         socket_packet::connect(stream, address)?;
         self.state.response_total += 1;
         Ok(())
     }
 
-    /// Handles the completed operation.
-    ///
-    /// An entry without packet holds an identifier, which has been sent with [`SocketQueueManager::enqueue`]. **Only**
-    /// [`SHUTDOWN`] is handled here, it shuts down this instance **instantly**. Any other identifier only stops the
-    /// blocking of the current thread.
-    ///
-    /// The packet of any other entry is given to the [`SocketHandler`] of the identifier of the entry, see
-    /// [`handle_event`](Self::handle_event). If the [`SocketHandler`] has already been closed, the packet is
-    /// released.
-    ///
-    /// A write operation, which has sent only a part of the messages, is scheduled again with the remaining part. If
-    /// it could not be scheduled again, the [`SocketHandler`] is closed.
-    ///
-    /// # Arguments
-    ///
-    /// - `entry` — The completed operation of the [`SocketQueueManager`]
-    ///
-    /// # See also
-    ///
-    /// - [`run_worker`](Self::run_worker)
     fn handle(&mut self, entry: &OVERLAPPED_ENTRY) {
         if entry.lpOverlapped.is_null() {
             self.is_shutdown |= entry.lpCompletionKey == SHUTDOWN;
@@ -231,21 +94,7 @@ impl ChannelManager {
         });
     }
 
-    /// Closes each socket and blocks the current thread until all operations have completed.
-    ///
-    /// Once a socket is closed, Windows cancels its pending operations, so each of them completes with an error. The
-    /// packets of these operations are released without being handled.
-    ///
-    /// <div class="warning">
-    ///
-    /// If the completed operations could not be retrieved, the error is logged and the packets of the remaining
-    /// operations are **never** released.
-    ///
-    /// </div>
-    ///
-    /// # See also
-    ///
-    /// - [`close_resource`](ChannelManager::close_resource)
+    /// If the port fails here, the packets still in flight are leaked.
     pub(crate) fn close(&mut self) {
         let mut entries = mem::take(&mut self.state.entries);
         let sockets: Vec<(usize, Box<dyn SocketHandler>)> = self.sockets.drain().collect();

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-//! The IO handlers of each platform and the [`SocketQueueFactory`], which they create.
+//! The IO handlers of each platform.
 #[cfg_attr(target_os = "linux", path = "../unix/linux.rs")]
 #[cfg_attr(target_os = "macos", path = "../unix/darwin.rs")]
 #[cfg_attr(target_os = "freebsd", path = "../unix/freebsd.rs")]

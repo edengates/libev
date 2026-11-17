@@ -25,24 +25,6 @@ use std::net::TcpListener;
 use std::os::windows::io::{AsSocket, BorrowedSocket};
 use std::time::Duration;
 
-/// Accepts the connections of a bound socket, and registers a new [`SocketChannel`] for each connection with the
-/// [worker pool](SocketManager::worker_pool).
-///
-/// Up to [`concurrency`](SocketManager::concurrency) accept operations are scheduled at the same time with
-/// `AcceptEx`, and a new accept operation is scheduled each time one has completed.
-///
-/// **Note:** If an accept operation has failed, its socket is closed.
-///
-/// If an accept operation could not be started while no other accept operation is pending, a warning is logged and
-/// libev stops accepting new connections for the [`reconnect_delay`](SocketManager::reconnect_delay), to allow the
-/// socket to recover. This delay doubles after each further failed attempt, up to the
-/// [`max_reconnect_delay`](SocketManager::max_reconnect_delay), and is reset once all accept operations have been
-/// scheduled again.
-///
-/// # See also
-///
-/// - [`SocketChannel`]
-/// - [`ChannelManager::accept`]
 pub struct SessionController {
     listener: TcpListener,
     socket_manager: SocketManager,
@@ -51,14 +33,6 @@ pub struct SessionController {
 }
 
 impl SessionController {
-    /// Creates a new instance for the provided bound socket.
-    ///
-    /// **Note:** No connection is accepted *until* this instance has been registered with the [`ChannelManager`].
-    ///
-    /// # Arguments
-    ///
-    /// - `listener` — The bound socket
-    /// - `socket_manager` — The [`SocketManager`] to use
     pub fn new(listener: TcpListener, socket_manager: SocketManager) -> Self {
         let reconnect_delay = socket_manager.reconnect_delay();
         Self {

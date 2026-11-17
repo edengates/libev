@@ -18,12 +18,7 @@ use std::any::Any;
 
 /// Interface for events supported by [`MessageChannel`].
 ///
-/// # See also
-///
-/// - [`ListenerAdapter::on_generic_event`]
-///
 /// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
-/// [`ListenerAdapter::on_generic_event`]: crate::hooks::ListenerAdapter::on_generic_event
 pub trait GenericEvent: Any + Send {}
 
 // We do the downcasting on dyn GenericEvent because type parameters would make the trait not dyn-compatible.

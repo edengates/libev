@@ -27,10 +27,7 @@ pub struct SingleThreadFactory {
 impl SingleThreadFactory {
     /// Creates a new [`SingleThreadFactory`] instance.
     ///
-    /// # Arguments
-    ///
-    /// - `capacity` — The maximum number of events handled at once
-    /// - `factory` — The [`SocketQueueFactory`] that will be used to handle IO
+    /// The `capacity` is the maximum number of events handled per poll, see [`SingleThreadManager::new`].
     pub fn new(capacity: usize, factory: SocketQueueFactory) -> Self {
         Self { capacity, factory }
     }
@@ -39,23 +36,6 @@ impl SingleThreadFactory {
 impl ThreadManagerFactory for SingleThreadFactory {
     type ThreadManager = SingleThreadManager;
 
-    /// Creates a new [`SingleThreadManager`] instance with the specified [`ElasticThreadManager`].
-    ///
-    /// The [`ScheduledThreadManager`] will call this for each shard.
-    ///
-    /// # Arguments
-    ///
-    /// - `manager` — The [`ElasticThreadManager`] that is used for dispatching the work
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the [`SingleThreadManager`] could not be created.
-    ///
-    /// # Returns
-    ///
-    /// The newly constructed [`SingleThreadManager`].
-    ///
-    /// [`ScheduledThreadManager`]: crate::utils::concurrent::ScheduledThreadManager
     fn new_manager(&self, manager: &ElasticThreadManager) -> io::Result<SingleThreadManager> {
         SingleThreadManager::new(manager, self.capacity, self.factory)
     }

@@ -17,30 +17,22 @@
 use crate::utils::concurrent::CountingThreadFactory;
 use std::io;
 
-/// Elastic pool which creates a new thread for each task, used for **blocking** execution.
+/// Executor which creates a new thread for each task, used for blocking execution.
 pub struct ElasticThreadManager {
     thread_factory: CountingThreadFactory,
 }
 
 impl ElasticThreadManager {
-    /// Creates a new [`ElasticThreadManager`] instance with the specified [`CountingThreadFactory`].
-    ///
-    /// # Arguments
-    ///
-    /// - `thread_factory` — The [`CountingThreadFactory`] used to create each thread
+    /// Creates a new [`ElasticThreadManager`].
     pub fn new(thread_factory: CountingThreadFactory) -> Self {
         Self { thread_factory }
     }
 
-    /// Executes the given command with a new thread created by the provided [`CountingThreadFactory`].
-    ///
-    /// # Arguments
-    ///
-    /// - `command` — The command to execute
+    /// Executes the command on a new thread.
     ///
     /// # Errors
     ///
-    /// Returns an error if the thread could not be created.
+    /// Returns the error of [`CountingThreadFactory::new_thread`].
     pub fn execute<F>(&self, command: F) -> io::Result<()>
     where
         F: FnOnce() + Send + 'static,

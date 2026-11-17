@@ -24,47 +24,28 @@ use std::io;
 /// A trait which divides [`GenericEvent`]s for you. You should override the methods provided by this trait for your
 /// event listener implementation.
 ///
-/// Register a [`ListenerAdapter`] with the [`DefaultSocketManagerBuilder`]. Listeners are handled in the order they
-/// are registered: events from the socket are handled by the first listener, then by the next one.
+/// Register a [`ListenerAdapter`] with [`add_event_listener_provider`]. Events from the socket reach the listeners in
+/// the order they were registered, and a message written by a listener passes the listeners before it on the way to
+/// the socket. By default every method passes the event or message on through the [`MessageChannel`].
 ///
 /// `I` is the type of the messages from the socket side, `O` is the type of the messages for the next listener.
-/// **If a method returns an error, the [`MessageChannel`] is closed.**
+/// If a method returns an error, the [`MessageChannel`] is closed.
 ///
-/// # See also
-///
-/// - [`add_event_listener_provider`](crate::DefaultSocketManagerBuilder::add_event_listener_provider)
-///
-/// [`DefaultSocketManagerBuilder`]: crate::DefaultSocketManagerBuilder
+/// [`add_event_listener_provider`]: crate::DefaultSocketManagerBuilder::add_event_listener_provider
 #[allow(async_fn_in_trait)]
 pub trait ListenerAdapter<I: Any + Send = BytesMut, O: Any + Send = BytesMut>: Send {
-    /// Handles a [`ChannelReadyEvent`].
-    ///
-    /// By default it is fired to the next listener with [`MessageChannel::on_ready`].
-    ///
-    /// # Arguments
-    ///
-    /// - `channel` — The [`MessageChannel`] of this listener
-    ///
-    /// [`ChannelReadyEvent`]: crate::events::channel::ChannelReadyEvent
+    /// The channel is connected now.
     async fn on_ready(&mut self, channel: &mut MessageChannel<O, I>) -> io::Result<()> {
         channel.on_ready();
         Ok(())
     }
 
-    /// Handles a [`MessageReceivedEvent`] with the received message.
-    ///
-    /// By default the message is fired to the next listener with [`MessageChannel::on_message_received`].
-    ///
-    /// # Arguments
-    ///
-    /// - `channel` — The [`MessageChannel`] of this listener
-    /// - `message` — The received message
+    /// Gets called once the channel received a message.
     ///
     /// # Errors
     ///
     /// By default returns [`InvalidInput`] if `I` and `O` are different types.
     ///
-    /// [`MessageReceivedEvent`]: crate::events::message::MessageReceivedEvent
     /// [`InvalidInput`]: io::ErrorKind::InvalidInput
     async fn on_message_received(&mut self, channel: &mut MessageChannel<O, I>, message: I) -> io::Result<()> {
         let message = cast(message).ok_or(io::ErrorKind::InvalidInput)?;
@@ -72,64 +53,27 @@ pub trait ListenerAdapter<I: Any + Send = BytesMut, O: Any + Send = BytesMut>: S
         Ok(())
     }
 
-    /// Handles a [`ChannelDisconnectEvent`].
-    ///
-    /// By default it is fired to the next listener with [`MessageChannel::on_channel_disconnect`].
-    ///
-    /// # Arguments
-    ///
-    /// - `channel` — The [`MessageChannel`] of this listener
-    ///
-    /// [`ChannelDisconnectEvent`]: crate::events::channel::ChannelDisconnectEvent
+    /// The channel is closed now.
     async fn on_channel_disconnect(&mut self, channel: &mut MessageChannel<O, I>) -> io::Result<()> {
         channel.on_channel_disconnect();
         Ok(())
     }
 
-    /// Handles a [`ChannelUpdateSlowmodeEvent`].
-    ///
-    /// By default it is fired to the next listener with [`MessageChannel::on_channel_update_slowmode`].
-    ///
-    /// # Arguments
-    ///
-    /// - `channel` — The [`MessageChannel`] of this listener
-    ///
-    /// # See also
-    ///
-    /// - [`MessageChannel::is_locked`]
-    ///
-    /// [`ChannelUpdateSlowmodeEvent`]: crate::events::channel::update::ChannelUpdateSlowmodeEvent
+    /// Gets called once the slow mode of the channel changed. You can check it with [`MessageChannel::is_locked`].
     async fn on_channel_update_slowmode(&mut self, channel: &mut MessageChannel<O, I>) -> io::Result<()> {
         channel.on_channel_update_slowmode();
         Ok(())
     }
 
-    /// Handles a [`ChannelTimeoutEvent`].
+    /// Nothing was read or written for the [AFK timeout].
     ///
-    /// By default it is fired to the next listener with [`MessageChannel::on_channel_timeout`].
-    ///
-    /// # Arguments
-    ///
-    /// - `channel` — The [`MessageChannel`] of this listener
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::afk_timeout`](crate::SocketManager::afk_timeout)
-    ///
-    /// [`ChannelTimeoutEvent`]: crate::events::channel::ChannelTimeoutEvent
+    /// [AFK timeout]: crate::DefaultSocketManagerBuilder::set_afk_timeout
     async fn on_channel_timeout(&mut self, channel: &mut MessageChannel<O, I>) -> io::Result<()> {
         channel.on_channel_timeout();
         Ok(())
     }
 
-    /// Handles any [`GenericEvent`].
-    ///
-    /// By default it is fired to the next listener with [`MessageChannel::on_generic_event`].
-    ///
-    /// # Arguments
-    ///
-    /// - `channel` — The [`MessageChannel`] of this listener
-    /// - `event` — The event to handle
+    /// Handles any other [`GenericEvent`].
     async fn on_generic_event(&mut self, channel: &mut MessageChannel<O, I>, event: Box<dyn GenericEvent>) -> io::Result<()> {
         channel.on_generic_event(event);
         Ok(())
@@ -137,22 +81,10 @@ pub trait ListenerAdapter<I: Any + Send = BytesMut, O: Any + Send = BytesMut>: S
 
     /// Handles a message from the next listener, for example to encode it.
     ///
-    /// By default the message is sent to the parent channel with [`MessageChannel::enqueue`].
-    ///
-    /// # Arguments
-    ///
-    /// - `channel` — The [`MessageChannel`] of this listener
-    /// - `message` — The message from the next listener
-    ///
     /// # Errors
     ///
-    /// By default returns an error:
-    /// - [`InvalidInput`] if `I` and `O` are different types
-    /// - [`NotConnected`] if the channel has been shutdown by [`MessageChannel::close`]
-    ///
-    /// # See also
-    ///
-    /// - [`MessageChannel::send_message`]
+    /// By default returns [`InvalidInput`] if `I` and `O` are different types, or [`NotConnected`] if the channel has
+    /// been closed.
     ///
     /// [`InvalidInput`]: io::ErrorKind::InvalidInput
     /// [`NotConnected`]: io::ErrorKind::NotConnected
@@ -162,12 +94,6 @@ pub trait ListenerAdapter<I: Any + Send = BytesMut, O: Any + Send = BytesMut>: S
     }
 
     /// Handles [`MessageChannel::close`] of the next listener.
-    ///
-    /// By default it is forwarded to the parent channel with [`MessageChannel::close`].
-    ///
-    /// # Arguments
-    ///
-    /// - `channel` — The [`MessageChannel`] of this listener
     async fn close(&mut self, channel: &mut MessageChannel<O, I>) -> io::Result<()> {
         channel.close();
         Ok(())

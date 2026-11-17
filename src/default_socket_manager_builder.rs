@@ -29,7 +29,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Used to create the event managers of a new channel.
 type PipelineFactory<P> = Arc<dyn Fn(&SocketManager, &Rc<RefCell<SocketBufferQueue>>, &EventQueue<BytesMut>) -> P + Send + Sync>;
 
 /// Used to create new instances of [`SocketManager`].
@@ -60,7 +59,7 @@ pub struct DefaultSocketManagerBuilder<P = Rc<EventManagerProxy>> {
 impl DefaultSocketManagerBuilder {
     /// Creates a [`DefaultSocketManagerBuilder`] with recommended default settings.
     ///
-    /// **Note:** these defaults can potentially change in the future.
+    /// Note that these defaults can potentially change in the future.
     pub fn new() -> Self {
         Self {
             socket_pool: None,
@@ -89,23 +88,11 @@ impl DefaultSocketManagerBuilder {
 }
 
 impl<P: EventManager> DefaultSocketManagerBuilder<P> {
-    /// Sets the backlog value to specify when [`SocketManager::bind`] binds to a local address.
+    /// Sets the backlog passed to `listen(2)` for the sockets bound by [`SocketManager::bind`].
     ///
-    /// This is the maximum length of the queue of incoming connections, which have **not** been accepted yet.
+    /// This is the maximum length of the queue of incoming connections that are not accepted yet.
     ///
     /// Default: `200`
-    ///
-    /// # Arguments
-    ///
-    /// - `backlog` — The backlog value to use
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::backlog`]
     pub fn set_backlog(mut self, backlog: i32) -> Self {
         self.backlog = backlog;
         self
@@ -113,95 +100,37 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
 
     /// Sets the maximum number of connections to accept per read loop.
     ///
-    /// If this value is greater than 1, the thread manager might attempt to accept multiple times to retrieve multiple
-    /// connections.
-    ///
-    /// **Note:** With IOCP and io_uring this is the number of accept operations queued at once.
+    /// With IOCP and io_uring this is instead the number of pending accept operations.
     ///
     /// Default: `32`
-    ///
-    /// # Arguments
-    ///
-    /// - `concurrency` — The maximum number of connections to accept per read loop
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::concurrency`]
     pub fn set_concurrency(mut self, concurrency: usize) -> Self {
         self.concurrency = concurrency;
         self
     }
 
-    /// The size, in bytes, of the buffer used for reading messages.
+    /// Sets the size, in bytes, of the buffer used to read messages.
     ///
-    /// Every read reserves **at least** this size in the buffer.
-    ///
-    /// **Note:** With io_uring this is the size of each buffer in the buffer ring.
+    /// Every read reserves at least this size. With io_uring this is the size of each buffer in the buffer ring.
     ///
     /// Default: `4096`
-    ///
-    /// # Arguments
-    ///
-    /// - `buffer_size` — The size of the buffer in bytes
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::buffer_size`]
     pub fn set_buffer_size(mut self, buffer_size: usize) -> Self {
         self.buffer_size = buffer_size;
         self
     }
 
-    /// Sets the amount of time that libev will stop to accept new connections after an error, to allow the socket to
-    /// recover (for example when there are too many open files).
+    /// Sets how long libev stops accepting new connections after an error.
     ///
-    /// This will use an incremental reconnect (timeouts are increased each time an attempt fails), up to the
-    /// [`max_reconnect_delay`](Self::set_max_reconnect_delay).
+    /// The delay grows with each failed attempt, up to the [`max_reconnect_delay`](Self::set_max_reconnect_delay).
     ///
     /// Default: `2` seconds
-    ///
-    /// # Arguments
-    ///
-    /// - `reconnect_delay` — The amount of time that libev will wait before it accepts connections again
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::reconnect_delay`]
-    /// - [`set_max_reconnect_delay`](Self::set_max_reconnect_delay)
     pub fn set_reconnect_delay(mut self, reconnect_delay: Duration) -> Self {
         self.reconnect_delay = reconnect_delay;
         self
     }
 
-    /// Sets the maximum amount of time that libev will back off to wait when attempting to accept new connections
-    /// again.
+    /// Sets the upper limit for the [`reconnect_delay`](Self::set_reconnect_delay).
     ///
     /// Default: `900` seconds
-    ///
-    /// # Arguments
-    ///
-    /// - `max_reconnect_delay` — The maximum amount of time that libev will wait between reconnect attempts
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::max_reconnect_delay`]
-    /// - [`set_reconnect_delay`](Self::set_reconnect_delay)
     pub fn set_max_reconnect_delay(mut self, max_reconnect_delay: Duration) -> Self {
         self.max_reconnect_delay = max_reconnect_delay;
         self
@@ -209,24 +138,10 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
 
     /// Sets the low water mark for the write buffer of each channel.
     ///
-    /// If the number of bytes queued in the write buffer exceeds the [`large_threshold`](Self::set_large_threshold) and
-    /// then dropped down below the low water mark, the channel will stop to use slowmode and a
-    /// [`ChannelUpdateSlowmodeEvent`] is fired again.
+    /// Once a channel in slow mode drops below this many queued bytes, it leaves slow mode and a
+    /// [`ChannelUpdateSlowmodeEvent`] is fired again. See [`set_large_threshold`](Self::set_large_threshold).
     ///
     /// Default: `32768`
-    ///
-    /// # Arguments
-    ///
-    /// - `threshold` — The low water mark in bytes
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::threshold`]
-    /// - [`set_large_threshold`](Self::set_large_threshold)
     ///
     /// [`ChannelUpdateSlowmodeEvent`]: crate::events::channel::update::ChannelUpdateSlowmodeEvent
     pub fn set_threshold(mut self, threshold: usize) -> Self {
@@ -236,23 +151,9 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
 
     /// Sets the high water mark for the write buffer of each channel.
     ///
-    /// If the number of bytes queued in the write buffer exceeds the high water mark, the channel will start to use
-    /// slowmode and a [`ChannelUpdateSlowmodeEvent`] is fired.
+    /// Above this many queued bytes the channel goes into slow mode and a [`ChannelUpdateSlowmodeEvent`] is fired.
     ///
     /// Default: `65536`
-    ///
-    /// # Arguments
-    ///
-    /// - `large_threshold` — The high water mark in bytes
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::large_threshold`]
-    /// - [`set_threshold`](Self::set_threshold)
     ///
     /// [`ChannelUpdateSlowmodeEvent`]: crate::events::channel::update::ChannelUpdateSlowmodeEvent
     pub fn set_large_threshold(mut self, large_threshold: usize) -> Self {
@@ -260,165 +161,70 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
         self
     }
 
-    /// Sets the maximum amount of time to wait until the thread managers are shut down on [`SocketManager::shutdown`],
-    /// regardless of open connections.
-    ///
-    /// After this time **all** remaining connections are closed.
+    /// Sets how long [`SocketManager::shutdown`] waits for open connections before it closes them and shuts down the
+    /// pools.
     ///
     /// Default: `15` seconds
-    ///
-    /// # Arguments
-    ///
-    /// - `shutdown_timeout` — The maximum time to wait
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::shutdown_timeout`]
-    /// - [`SocketManager::shutdown`]
     pub fn set_shutdown_timeout(mut self, shutdown_timeout: Duration) -> Self {
         self.shutdown_timeout = shutdown_timeout;
         self
     }
 
-    /// Sets the maximum number of chunks to read per read loop.
+    /// Sets the maximum number of [`buffer_size`](Self::set_buffer_size) chunks to read per read loop.
     ///
-    /// If this value is greater than 1, the thread manager might attempt to read multiple times to retrieve multiple
-    /// chunks of [`buffer_size`](Self::set_buffer_size) bytes. This is **not** used with io_uring.
+    /// Not used with io_uring.
     ///
     /// Default: `16`
-    ///
-    /// # Arguments
-    ///
-    /// - `chunk_limit` — The maximum number of chunks to read per read loop
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::chunk_limit`]
     pub fn set_chunk_limit(mut self, chunk_limit: usize) -> Self {
         self.chunk_limit = chunk_limit;
         self
     }
 
-    /// Sets the maximum number of messages to write at once.
+    /// Sets the maximum number of messages written with one gathering write (`writev` or `WSASend`).
     ///
-    /// The messages are written with one gathering write (`writev` or `WSASend`), so this should **not** be greater
-    /// than `IOV_MAX`, the maximum number of `iovec` structs that can be passed to `writev`.
+    /// Should not be greater than `IOV_MAX`.
     ///
     /// Default: `1024`
-    ///
-    /// # Arguments
-    ///
-    /// - `packet_limit` — The maximum number of messages to write at once
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::packet_limit`]
     pub fn set_packet_limit(mut self, packet_limit: usize) -> Self {
         self.packet_limit = packet_limit;
         self
     }
 
-    /// Enables/Disables the use of `TCP_NODELAY` (disables/enables Nagle's algorithm).
+    /// Sets the value of the `TCP_NODELAY` option on each connection.
     ///
-    /// **Note:** the default value of this option is `true` unlike the operating system default (`false`).
+    /// If set, this option disables the Nagle algorithm. This means that segments are always sent as soon as possible,
+    /// even if there is only a small amount of data. The operating system default is `false`.
     ///
-    /// Default: **true (enabled)**
-    ///
-    /// # Arguments
-    ///
-    /// - `tcp_no_delay` — Whether `TCP_NODELAY` should be enabled
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::tcp_no_delay`]
+    /// Default: `true`
     pub fn set_tcp_no_delay(mut self, tcp_no_delay: bool) -> Self {
         self.tcp_no_delay = tcp_no_delay;
         self
     }
 
-    /// Enables the use of `SO_LINGER` with the specified linger time in seconds.
+    /// Sets value for the `SO_LINGER` option on each connection.
     ///
-    /// The linger time will be truncated to seconds.
-    ///
-    /// **Note:** With a linger time of `0` the connection is reset on close instead of a normal shutdown.
+    /// The duration only has a precision of seconds and will be silently truncated. With `0` the connection is reset on
+    /// close instead of a normal shutdown.
     ///
     /// Default: `None` (disabled)
-    ///
-    /// # Arguments
-    ///
-    /// - `close_timeout` — The linger time to use
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::close_timeout`]
     pub fn set_close_timeout(mut self, close_timeout: Duration) -> Self {
         self.close_timeout = Some(close_timeout);
         self
     }
 
-    /// Sets the connect timeout of the channels created by [`SocketManager::connect`].
-    ///
-    /// If the connection is **not** established in this time, the channel is closed.
+    /// Sets the connect timeout for [`SocketManager::connect`], after which the channel is closed.
     ///
     /// Default: `30` seconds
-    ///
-    /// # Arguments
-    ///
-    /// - `connect_timeout` — The maximum amount of time to wait until a connection is established
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::connect_timeout`]
-    /// - [`SocketManager::connect`]
     pub fn set_connect_timeout(mut self, connect_timeout: Duration) -> Self {
         self.connect_timeout = connect_timeout;
         self
     }
 
-    /// Fires a [`ChannelTimeoutEvent`] when a channel has not performed read or write operation for the specified
-    /// amount of time.
+    /// Sets the AFK timeout of each channel.
     ///
-    /// The event is fired again after each further period without read or write. The channel is **not** closed, a
-    /// listener can close it on the event.
+    /// A [`ChannelTimeoutEvent`] is fired after each period of this length without read or write.
     ///
     /// Default: `None` (disabled)
-    ///
-    /// # Arguments
-    ///
-    /// - `afk_timeout` — The amount of time without read or write
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::afk_timeout`]
-    /// - [`ChannelTimeoutEvent`]
     ///
     /// [`ChannelTimeoutEvent`]: crate::events::channel::ChannelTimeoutEvent
     pub fn set_afk_timeout(mut self, afk_timeout: Duration) -> Self {
@@ -426,71 +232,32 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
         self
     }
 
-    /// Enables/Disables the use of `SO_REUSEPORT` for the sockets bound by [`SocketManager::bind`].
+    /// Sets value for the `SO_REUSEPORT` option on the sockets bound by [`SocketManager::bind`].
     ///
-    /// This will allow to bind multiple sockets to the same port and so accept connections with multiple threads.
+    /// This allows multiple threads to bind to the same port. On Windows this uses `SO_REUSEADDR` instead of
+    /// `SO_EXCLUSIVEADDRUSE`.
     ///
-    /// **Note:** On Windows this uses `SO_REUSEADDR` instead of `SO_EXCLUSIVEADDRUSE`.
-    ///
-    /// Default: **false (disabled)**
-    ///
-    /// # Arguments
-    ///
-    /// - `is_address_shared` — Whether `SO_REUSEPORT` should be enabled
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::is_address_shared`]
+    /// Default: `false`
     pub fn set_address_shared(mut self, is_address_shared: bool) -> Self {
         self.is_address_shared = is_address_shared;
         self
     }
 
-    /// Enables/Disables IPv4 connections on IPv6 sockets bound by [`SocketManager::bind`].
+    /// Allows IPv4 connections on the IPv6 sockets bound by [`SocketManager::bind`].
     ///
-    /// If enabled, `IPV6_V6ONLY` is disabled, so a socket bound to `[::]` also accepts IPv4 connections.
+    /// If `true`, `IPV6_V6ONLY` is cleared, so a socket bound to `[::]` can be used with IPv4-mapped addresses.
     ///
-    /// Default: **true (enabled)**
-    ///
-    /// # Arguments
-    ///
-    /// - `is_fallback_enabled` — Whether IPv4 connections should be enabled on IPv6 sockets
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::is_fallback_enabled`]
+    /// Default: `true`
     pub fn set_fallback_enabled(mut self, is_fallback_enabled: bool) -> Self {
         self.is_fallback_enabled = is_fallback_enabled;
         self
     }
 
-    /// Sets the maximum amount of time that the listeners of a closed channel may still run.
+    /// Sets how long the listeners of a closed channel may still handle the remaining events.
     ///
-    /// After a [`ChannelDisconnectEvent`] the listeners can still handle the remaining events, after this time the
-    /// processing is cancelled.
+    /// The time starts with the [`ChannelDisconnectEvent`], after it the processing is canceled.
     ///
     /// Default: `30` seconds
-    ///
-    /// # Arguments
-    ///
-    /// - `timeout` — The maximum amount of time that the listeners of a closed channel may still run
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::timeout`]
-    /// - [`ChannelDisconnectEvent`]
     ///
     /// [`ChannelDisconnectEvent`]: crate::events::channel::ChannelDisconnectEvent
     pub fn set_timeout(mut self, timeout: Duration) -> Self {
@@ -498,25 +265,9 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
         self
     }
 
-    /// Sets the [`ScheduledThreadManager`] that should be used for the channels created by [`SocketManager::connect`]
-    /// and the accepted connections.
-    ///
-    /// **Only change this pool if you know what you're doing.**
+    /// Sets the pool used for the channels created by [`SocketManager::connect`] and for the accepted connections.
     ///
     /// Default: the [`socket_pool`](Self::set_socket_pool)
-    ///
-    /// # Arguments
-    ///
-    /// - `worker_pool` — The thread-pool to use for the channels
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::worker_pool`]
-    /// - [`set_socket_pool`](Self::set_socket_pool)
     pub fn set_worker_pool(
         mut self,
         worker_pool: ScheduledThreadManager<SingleThreadManager>,
@@ -525,24 +276,9 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
         self
     }
 
-    /// Sets the [`ScheduledThreadManager`] that should be used for the sockets bound by [`SocketManager::bind`].
-    ///
-    /// **Only change this pool if you know what you're doing.**
+    /// Sets the pool used for the sockets bound by [`SocketManager::bind`].
     ///
     /// Default: Shared [`ScheduledThreadManager`] with (`2 *` [`available_parallelism`]) shards.
-    ///
-    /// # Arguments
-    ///
-    /// - `socket_pool` — The thread-pool to use for the bound sockets
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`SocketManager::socket_pool`]
-    /// - [`set_worker_pool`](Self::set_worker_pool)
     ///
     /// [`available_parallelism`]: std::thread::available_parallelism
     pub fn set_socket_pool(
@@ -553,25 +289,9 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
         self
     }
 
-    /// Adds the provided listener to the list of listeners that will be used to populate the [`SocketManager`] object.
+    /// Adds the listener to the list of listeners that will be used to populate the [`SocketManager`] object.
     ///
-    /// **Note:** Every channel uses its own clone of the listener.
-    ///
-    /// Listeners are handled in the order they are added: events from the socket are handled by the first listener,
-    /// then by the next one.
-    ///
-    /// # Arguments
-    ///
-    /// - `listener` — The [`ListenerAdapter`] to add
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`add_event_listener_provider`](Self::add_event_listener_provider)
-    /// - [`ListenerAdapter`]
+    /// Every channel uses its own clone of the listener. Listeners are called in the order they are added.
     pub fn add_event_listener<L, O>(self, listener: L) -> DefaultSocketManagerBuilder<InterfacedEventManager<P, L, O>>
     where
         L: ListenerAdapter<P::Output, O> + Clone + Sync + 'static,
@@ -580,19 +300,7 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
         self.add_event_listener_provider(move || listener.clone())
     }
 
-    /// Adds the provided listener provider to the list of listener providers that will be used to create listeners.
-    ///
-    /// # Arguments
-    ///
-    /// - `provider` — The listener provider to add to the list of listener providers
-    ///
-    /// # Returns
-    ///
-    /// The [`DefaultSocketManagerBuilder`] instance. Useful for chaining.
-    ///
-    /// # See also
-    ///
-    /// - [`add_event_listener`](Self::add_event_listener)
+    /// Like [`add_event_listener`](Self::add_event_listener), but the provider is called once for each new channel.
     pub fn add_event_listener_provider<F, L, O>(self, provider: F) -> DefaultSocketManagerBuilder<InterfacedEventManager<P, L, O>>
     where
         F: Fn() -> L + Send + Sync + 'static,
@@ -605,11 +313,6 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
         }))
     }
 
-    /// Returns a new builder with the provided factory, which keeps all settings of this builder.
-    ///
-    /// # Arguments
-    ///
-    /// - `factory` — The new factory to use
     fn set_factory<Q>(self, factory: PipelineFactory<Q>) -> DefaultSocketManagerBuilder<Q> {
         DefaultSocketManagerBuilder {
             socket_pool: self.socket_pool,
@@ -640,17 +343,7 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
     ///
     /// # Errors
     ///
-    /// Returns an error:
-    /// - [`InvalidInput`] if no listener has been added
-    /// - If the default [`socket_pool`](Self::set_socket_pool) could not be created
-    ///
-    /// # Returns
-    ///
-    /// A new [`SocketManager`] instance.
-    ///
-    /// # See also
-    ///
-    /// - [`add_event_listener`](Self::add_event_listener)
+    /// Fails with [`InvalidInput`] if no listener was added, or if the default socket pool cannot be created.
     ///
     /// [`InvalidInput`]: io::ErrorKind::InvalidInput
     pub fn build(self) -> io::Result<SocketManager> {

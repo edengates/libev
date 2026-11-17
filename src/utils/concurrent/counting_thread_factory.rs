@@ -27,18 +27,10 @@ pub struct CountingThreadFactory {
 }
 
 impl CountingThreadFactory {
-    /// Creates a new [`CountingThreadFactory`] with the provided identifier and specifier.
+    /// Creates a new [`CountingThreadFactory`].
     ///
-    /// The thread name is `{identifier} {specifier}-Worker {id}`, with the id starting at 1.
-    ///
-    /// # Arguments
-    ///
-    /// - `identifier` — The function, which provides the identifier of each thread name
-    /// - `specifier` — The specifier of each thread name
-    ///
-    /// # See also
-    ///
-    /// - [`of`](Self::of)
+    /// Threads are named `{identifier} {specifier}-Worker {id}`, the id starts at 1. The `identifier` function is
+    /// called for each new thread.
     pub fn new<F, S>(identifier: F, specifier: &str) -> Self
     where
         F: Fn() -> S + Send + Sync + 'static,
@@ -51,32 +43,16 @@ impl CountingThreadFactory {
         }
     }
 
-    /// Creates a new [`CountingThreadFactory`] with the identifier of the type `T`.
-    ///
-    /// # Arguments
-    ///
-    /// - `specifier` — The specifier of each thread name
-    ///
-    /// # See also
-    ///
-    /// - [`new`](Self::new)
+    /// Uses the type name of `T`, without its path, as identifier.
     pub fn of<T>(specifier: &str) -> Self {
         Self::new(move || identifier_string::<T>(), specifier)
     }
 
-    /// Creates a new thread which executes the specified task.
-    ///
-    /// # Arguments
-    ///
-    /// - `task` — The task to execute
+    /// Spawns a new named thread for the task.
     ///
     /// # Errors
     ///
-    /// Returns an error if the thread could not be created.
-    ///
-    /// # Returns
-    ///
-    /// The [`JoinHandle`] of the new thread.
+    /// Fails if the OS could not create the thread.
     pub fn new_thread<F, R>(&self, task: F) -> io::Result<JoinHandle<R>>
     where
         F: FnOnce() -> R + Send + 'static,
@@ -94,7 +70,7 @@ impl CountingThreadFactory {
     }
 }
 
-/// The identifier of the type `T`: the name without the path and generic types.
+/// The name of `T` without the path and generic types.
 pub fn identifier_string<T>() -> String {
     lowercase({
         type_name::<T>()
@@ -107,13 +83,7 @@ pub fn identifier_string<T>() -> String {
     })
 }
 
-/// Converts the first letter to lowercase, if it is followed by a lowercase letter or by nothing.
-///
-/// Returns `unknown` if the text is empty.
-///
-/// # Arguments
-///
-/// - `text` — The text to convert
+/// Lowercases the first letter only if a lowercase letter or nothing follows. `IOCP` stays as it is.
 fn lowercase(text: &str) -> String {
     if text.is_empty() {
         return "unknown".to_string();

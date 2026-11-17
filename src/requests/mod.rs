@@ -15,9 +15,6 @@
  */
 
 //! Interactions between the listeners of a channel, such as the requests to write, send or close it.
-//!
-//! The requests of a listener are queued as `Command`s, and are handled by the `InterfacedEventManager` of the
-//! parent channel in the order they were queued.
 pub mod objactions;
 mod command;
 pub(crate) use command::Command;

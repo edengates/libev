@@ -19,11 +19,8 @@ use std::io;
 
 /// Factory for the socket queues, which handle the IO of a [`SingleThreadManager`].
 ///
-/// A [`SocketQueueFactory`] is created by the `new_factory` method of an IO handler, such as `EpollHandler`.
-/// [`Default`] uses the default IO handler of the platform:
-/// - epoll on Linux
-/// - kqueue on macOS and FreeBSD
-/// - IOCP on Windows
+/// Created by the `new_factory` method of an IO handler, such as `EpollHandler`. [`Default`] uses epoll on Linux,
+/// kqueue on macOS and FreeBSD, and IOCP on Windows.
 ///
 /// [`SingleThreadManager`]: crate::utils::concurrent::SingleThreadManager
 #[derive(Clone, Copy)]
@@ -32,28 +29,10 @@ pub struct SocketQueueFactory {
 }
 
 impl SocketQueueFactory {
-    /// Creates a new instance, which uses the provided function to create each [`SocketQueueManager`].
-    ///
-    /// # Arguments
-    ///
-    /// - `function` — The function used to create each [`SocketQueueManager`]
     pub(crate) fn new(function: fn(u32) -> io::Result<SocketQueueManager>) -> Self {
         Self { manager: function }
     }
 
-    /// Called when a new [`SocketQueueManager`] instance is needed.
-    ///
-    /// # Arguments
-    ///
-    /// - `capacity` — The maximum number of events handled at once
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the [`SocketQueueManager`] could not be created.
-    ///
-    /// # Returns
-    ///
-    /// The newly constructed [`SocketQueueManager`].
     pub(crate) fn new_manager(&self, capacity: u32) -> io::Result<SocketQueueManager> {
         (self.manager)(capacity)
     }

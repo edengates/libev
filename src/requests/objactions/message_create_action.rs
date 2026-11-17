@@ -26,16 +26,6 @@ pub struct MessageCreateAction<'a, N, P> {
 }
 
 impl<'a, N, P> MessageCreateAction<'a, N, P> {
-    /// Creates a new action, which will send the provided message to the provided channel.
-    ///
-    /// # Arguments
-    ///
-    /// - `channel` — The [`MessageChannel`] to send the message to
-    /// - `message` — The message to send
-    ///
-    /// # See also
-    ///
-    /// - [`MessageChannel::send_message`]
     pub(crate) fn new(channel: &'a mut MessageChannel<N, P>, message: P) -> Self {
         Self { channel, message }
     }

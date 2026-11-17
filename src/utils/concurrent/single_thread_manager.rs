@@ -26,7 +26,9 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-/// Executor that executes all its submitted tasks in a single thread using the provided [`SocketQueueFactory`].
+/// Executor that executes all its submitted tasks in a single thread using the [`SocketQueueFactory`].
+///
+/// Once it is shut down, new tasks are rejected with an error.
 pub struct SingleThreadManager {
     port: Arc<SocketQueueManager>,
     sender: Sender<Task>,
@@ -34,13 +36,9 @@ pub struct SingleThreadManager {
 }
 
 impl SingleThreadManager {
-    /// Creates a new instance.
+    /// Starts the thread of this manager on the `executor`.
     ///
-    /// # Arguments
-    ///
-    /// - `executor` — The [`ElasticThreadManager`] that is used for dispatching the work
-    /// - `capacity` — The maximum number of events handled at once
-    /// - `factory` — The [`SocketQueueFactory`] that should be used to handle IO
+    /// The `capacity` is the maximum number of events handled per poll. The `factory` will be used to handle IO.
     pub fn new(executor: &ElasticThreadManager, capacity: usize, factory: SocketQueueFactory) -> io::Result<Self> {
         let port = Arc::new(factory.new_manager(capacity as u32)?);
         let (sender, receiver) = mpsc::channel::<Task>();
@@ -75,67 +73,27 @@ impl SingleThreadManager {
         })
     }
 
-    /// The [`SocketQueueManager`] used to handle IO for this [`SingleThreadManager`].
     pub(crate) fn port(&self) -> &SocketQueueManager {
         &self.port
     }
 
-    /// Submits the provided task for execution.
-    ///
-    /// # Arguments
-    ///
-    /// - `task` — The task to execute
+    /// Submits the task for execution.
     ///
     /// # Errors
     ///
     /// Returns an error if this task cannot be accepted for execution.
-    ///
-    /// # See also
-    ///
-    /// - [`schedule`](Self::schedule)
-    /// - [`enqueue`](Self::enqueue)
     pub fn execute<F: FnOnce() + Send + 'static>(&self, task: F) -> io::Result<()> {
         self.submit(Box::new(move |_: &mut ChannelManager| task()))
     }
 
-    /// Schedules the provided task to be executed after the specified delay.
-    ///
-    /// # Arguments
-    ///
-    /// - `delay` — The delay after which the task is executed
-    /// - `task` — The task to execute
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if this task cannot be accepted for execution.
-    ///
-    /// # See also
-    ///
-    /// - [`execute`](Self::execute)
-    /// - [`delay`](Self::delay)
+    /// Schedules the task to be executed after the delay.
     pub fn schedule<F: FnOnce() + Send + 'static>(&self, delay: Duration, task: F) -> io::Result<()> {
         self.submit(Box::new(move |manager: &mut ChannelManager| {
             manager.schedule(delay, move |_| task());
         }))
     }
 
-    /// Schedules a call to complete the returned [`DelayedCompletableFuture`] after the specified delay.
-    ///
-    /// # Arguments
-    ///
-    /// - `delay` — The delay after which the [`DelayedCompletableFuture`] is completed
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if this task cannot be accepted for execution.
-    ///
-    /// # Returns
-    ///
-    /// The [`DelayedCompletableFuture`] representing the delayed operation.
-    ///
-    /// # See also
-    ///
-    /// - [`schedule`](Self::schedule)
+    /// Returns a [`DelayedCompletableFuture`] that completes after the delay.
     pub fn delay(&self, delay: Duration) -> io::Result<DelayedCompletableFuture> {
         let future = DelayedCompletableFuture::new();
         self.schedule(delay, {
@@ -145,33 +103,12 @@ impl SingleThreadManager {
         Ok(future)
     }
 
-    /// Submits the provided [`Future`] for execution.
-    ///
-    /// # Arguments
-    ///
-    /// - `future` — The [`Future`] to execute
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if this task cannot be accepted for execution.
-    ///
-    /// # See also
-    ///
-    /// - [`execute`](Self::execute)
-    /// - [`delay`](Self::delay)
+    /// Runs the [`Future`] on the thread of this manager.
     pub fn enqueue<F: Future<Output = ()> + Send + 'static>(&self, future: F) -> io::Result<()> {
         self.submit(Box::new(move |manager: &mut ChannelManager| manager.enqueue(Box::pin(future))))
     }
 
-    /// Registers the provided [`SocketHandler`] to this [`SingleThreadManager`] for I/O processing.
-    ///
-    /// # Arguments
-    ///
-    /// - `handler` — The function, which creates the [`SocketHandler`] on the thread of this [`SingleThreadManager`]
-    ///
-    /// # Returns
-    ///
-    /// The [`Receiver`], which receives the result once the operation completes.
+    /// The `handler` function creates the [`SocketHandler`] on the thread of this manager.
     pub(crate) fn register<F>(&self, handler: F) -> Receiver<io::Result<()>>
     where
         F: FnOnce() -> Box<dyn SocketHandler> + Send + 'static,
@@ -187,15 +124,6 @@ impl SingleThreadManager {
         receiver
     }
 
-    /// Adds the provided task to the queue.
-    ///
-    /// # Arguments
-    ///
-    /// - `task` — The task to add
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the [`SingleThreadManager`] has been shutdown.
     fn submit(&self, task: Task) -> io::Result<()> {
         self.sender
             .send(task)
@@ -203,50 +131,20 @@ impl SingleThreadManager {
         self.port().enqueue(DISPATCH)
     }
 
-    /// Shuts down this [`SingleThreadManager`], closing all its connections.
-    ///
-    /// # Arguments
-    ///
-    /// - `timeout` — The maximum amount of time to wait until the [`SingleThreadManager`] is shut down
-    ///
-    /// # See also
-    ///
-    /// - [`shutdown_now`](Self::shutdown_now)
-    /// - [`await_shutdown`](Self::await_shutdown)
+    /// Shuts down this [`SingleThreadManager`], waiting for at most `timeout` for its connections to close.
     pub fn shutdown(&self, timeout: Duration) {
         self.submit(Box::new(move |manager: &mut ChannelManager| manager.shutdown(timeout)))
             .ok();
     }
 
-    /// Shuts down this [`SingleThreadManager`] instantly, closing all its connections.
-    ///
-    /// This will also stop the processing of pending tasks.
-    ///
-    /// # See also
-    ///
-    /// - [`shutdown`](Self::shutdown)
-    /// - [`await_shutdown`](Self::await_shutdown)
+    /// Like [`shutdown`](Self::shutdown), but without waiting. Pending tasks are not processed anymore.
     pub fn shutdown_now(&self) -> io::Result<()> {
         self.port().enqueue(SHUTDOWN)
     }
 
     /// Blocks the current thread until the shutdown has completed.
     ///
-    /// **This will not implicitly call [`shutdown`](Self::shutdown), you are responsible to ensure that the
-    /// shutdown process has started.**
-    ///
-    /// # Arguments
-    ///
-    /// - `timeout` — The maximum time to wait
-    ///
-    /// # Returns
-    ///
-    /// `false`, if the timeout has elapsed before the shutdown has completed, `true` otherwise.
-    ///
-    /// # See also
-    ///
-    /// - [`shutdown`](Self::shutdown)
-    /// - [`shutdown_now`](Self::shutdown_now)
+    /// Returns `false` if the `timeout` elapsed first.
     pub fn await_shutdown(&self, timeout: Duration) -> bool {
         let shutdown_handle = self.shutdown_handle.lock().unwrap_or_else(PoisonError::into_inner);
         matches!(shutdown_handle.recv_timeout(timeout), Err(RecvTimeoutError::Disconnected))

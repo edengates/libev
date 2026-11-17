@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-//! Events that are fired for messages in a [`MessageChannel`]. Such as [receiving].
+//! Events that are fired for messages in a [`MessageChannel`], such as [receiving].
 //!
 //! [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
 //! [receiving]: MessageReceivedEvent

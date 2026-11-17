@@ -21,7 +21,7 @@
 //! has been received by the socket.
 //!
 //! All events are forwarded by the registered [`ListenerAdapter`]s. Some events are specific for internal events
-//! such as the [`ChannelReadyEvent`] which is **only** fired when a [`MessageChannel`] is ready to be used.
+//! such as the [`ChannelReadyEvent`] which is only fired when a [`MessageChannel`] is ready to be used.
 //!
 //! [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
 //! [`ListenerAdapter`]: crate::hooks::ListenerAdapter

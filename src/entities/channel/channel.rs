@@ -18,49 +18,24 @@ use std::io;
 
 /// Abstract channel interface for all channels, to which messages can be sent.
 ///
-/// Every [`MessageChannel`] is a [`Channel`], and so is its parent channel: the messages are sent through every
-/// parent channel until they reach the socket.
-///
-/// All operations are **asynchronous**: they will return **immediately**, with no guarantee that the request has
-/// been completed at the end of the call.
+/// All operations are asynchronous and return immediately, with no guarantee that the request has been completed at
+/// the end of the call.
 ///
 /// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
 pub trait Channel<T> {
-    /// Request to write a message via this [`Channel`].
-    ///
-    /// This method will **not** request to actual flush, so be sure to call [`execute`](Self::execute) once you want
-    /// to request to flush all pending messages to the socket.
-    ///
-    /// # Arguments
-    ///
-    /// - `message` — The message to write
+    /// Request to write a message via this channel. This does not request a flush, call
+    /// [`execute`](Self::execute) for that.
     ///
     /// # Errors
     ///
-    /// Returns [`NotConnected`] if the channel has been shutdown by [`close`](Self::close).
-    ///
-    /// # See also
-    ///
-    /// - [`execute`](Self::execute)
+    /// Returns [`NotConnected`] if the channel has been closed.
     ///
     /// [`NotConnected`]: io::ErrorKind::NotConnected
     fn enqueue(&self, message: T) -> io::Result<()>;
 
-    /// Request to flush all pending messages via this [`Channel`].
-    ///
-    /// # See also
-    ///
-    /// - [`enqueue`](Self::enqueue)
+    /// Request to flush all pending messages via this channel.
     fn execute(&self);
 
-    /// Request to close this [`Channel`].
-    ///
-    /// The connection is closed after all pending messages have been sent.
-    ///
-    /// <div class="warning">
-    ///
-    /// After it is closed the channel can **not** be used anymore.
-    ///
-    /// </div>
+    /// Request to close this channel once all pending messages have been sent.
     fn close(&self);
 }

@@ -14,5 +14,4 @@
  * limitations under the License.
  */
 
-//! Mixins which contain the state and the logic shared by the channel implementations.
 pub mod middleman;

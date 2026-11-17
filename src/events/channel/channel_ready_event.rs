@@ -20,13 +20,7 @@ use crate::events::GenericEvent;
 ///
 /// Before this event was fired all channel related functions were not guaranteed to work as expected.
 ///
-/// # See also
-///
-/// - [`ListenerAdapter::on_ready`]
-/// - [`SocketManager::connect`](crate::SocketManager::connect)
-///
 /// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
-/// [`ListenerAdapter::on_ready`]: crate::hooks::ListenerAdapter::on_ready
 pub struct ChannelReadyEvent;
 
 impl GenericEvent for ChannelReadyEvent {}

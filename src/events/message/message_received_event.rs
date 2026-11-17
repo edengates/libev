@@ -20,24 +20,12 @@ use std::any::Any;
 
 /// Indicates that a message was received in a [`MessageChannel`].
 ///
-/// Can be used to detect that a message is received. Providing a [`MessageChannel`] and message of type `T`.
-///
-/// # See also
-///
-/// - [`ListenerAdapter::on_message_received`]
-///
 /// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
-/// [`ListenerAdapter::on_message_received`]: crate::hooks::ListenerAdapter::on_message_received
 pub struct MessageReceivedEvent<T = BytesMut> {
     message: T,
 }
 
 impl<T> MessageReceivedEvent<T> {
-    /// Creates a new event with the received message.
-    ///
-    /// # Arguments
-    ///
-    /// - `message` — The received message
     pub(crate) fn new(message: T) -> Self {
         Self { message }
     }

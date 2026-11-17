@@ -18,16 +18,10 @@ use crate::events::GenericEvent;
 
 /// Indicates that a [`MessageChannel`]'s slow mode has been updated.
 ///
-/// Can be used to retrieve the new slow mode with [`MessageChannel::is_locked`].
-///
-/// # See also
-///
-/// - [`ListenerAdapter::on_channel_update_slowmode`]
-/// - [`DefaultSocketManagerBuilder::set_large_threshold`](crate::DefaultSocketManagerBuilder::set_large_threshold)
+/// The new slow mode is returned by [`MessageChannel::is_locked`].
 ///
 /// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
 /// [`MessageChannel::is_locked`]: crate::entities::channel::middleman::MessageChannel::is_locked
-/// [`ListenerAdapter::on_channel_update_slowmode`]: crate::hooks::ListenerAdapter::on_channel_update_slowmode
 pub struct ChannelUpdateSlowmodeEvent;
 
 impl GenericEvent for ChannelUpdateSlowmodeEvent {}

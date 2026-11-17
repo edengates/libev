@@ -19,35 +19,11 @@ use crate::events::channel::update::ChannelUpdateSlowmodeEvent;
 use crate::events::channel::{ChannelDisconnectEvent, ChannelReadyEvent, ChannelTimeoutEvent};
 use crate::events::message::MessageReceivedEvent;
 
-/// An event of a channel, which is handled by the next listener.
-///
-/// The events are added to the queue of the next listener and handled in the order they have been added. Each event
-/// is handled by the matching method of the [`ListenerAdapter`](crate::hooks::ListenerAdapter).
 pub enum SocketStatus<T> {
-    /// See [`ChannelReadyEvent`].
-    ///
-    /// Handled by [`ListenerAdapter::on_ready`](crate::hooks::ListenerAdapter::on_ready).
     ChannelReady(ChannelReadyEvent),
-    /// See [`MessageReceivedEvent`].
-    ///
-    /// Handled by [`ListenerAdapter::on_message_received`](crate::hooks::ListenerAdapter::on_message_received).
     MessageReceived(MessageReceivedEvent<T>),
-    /// See [`ChannelDisconnectEvent`].
-    ///
-    /// Handled by [`ListenerAdapter::on_channel_disconnect`](crate::hooks::ListenerAdapter::on_channel_disconnect).
     ChannelDisconnect(ChannelDisconnectEvent),
-    /// See [`ChannelUpdateSlowmodeEvent`].
-    ///
-    /// Handled by [`ListenerAdapter::on_channel_update_slowmode`].
-    ///
-    /// [`ListenerAdapter::on_channel_update_slowmode`]: crate::hooks::ListenerAdapter::on_channel_update_slowmode
     ChannelUpdateSlowmode(ChannelUpdateSlowmodeEvent),
-    /// See [`ChannelTimeoutEvent`].
-    ///
-    /// Handled by [`ListenerAdapter::on_channel_timeout`](crate::hooks::ListenerAdapter::on_channel_timeout).
     ChannelTimeout(ChannelTimeoutEvent),
-    /// A user defined event, see [`GenericEvent`].
-    ///
-    /// Handled by [`ListenerAdapter::on_generic_event`](crate::hooks::ListenerAdapter::on_generic_event).
     GenericEvent(Box<dyn GenericEvent>),
 }

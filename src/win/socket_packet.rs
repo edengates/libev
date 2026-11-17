@@ -31,39 +31,16 @@ use windows_sys::Win32::Networking::WinSock::{
 use windows_sys::Win32::System::IO::{OVERLAPPED, OVERLAPPED_ENTRY};
 use windows_sys::core::GUID;
 
-/// The type of an operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Type {
-    /// Accepts a new connection.
     Accept,
-    /// Connects to the remote address.
     Connect,
-    /// Receives bytes from the connection.
     Read,
-    /// Sends bytes over the connection.
     Write,
 }
 
-/// An operation, which is scheduled to the [`SocketQueueManager`](crate::handle::SocketQueueManager).
-///
-/// It holds the buffers of the operation until the operation has completed.
-///
-/// <div class="warning">
-///
-/// Once the operation has been started, the packet is held by Windows and **must not** be moved or released until the
-/// operation has completed, it is returned by [`handle_success`](Self::handle_success).
-///
-/// </div>
-///
-/// The `OVERLAPPED` of the operation is the first field, so the memory address of the `OVERLAPPED` is also the memory
-/// address of the packet.
-///
-/// **Note:** For an accept operation, the packet also holds the new socket of the connection.
-///
-/// # See also
-///
-/// - [`SocketQueueManager::poll`](crate::handle::SocketQueueManager::poll)
-/// - [`Type`]
+/// Once submitted, the packet must not be moved or released until Windows has completed the operation.
+/// The packet is found again from its `OVERLAPPED`, which must stay the first field.
 #[repr(C)]
 pub struct SocketPacket {
     overlapped: OVERLAPPED,
@@ -73,24 +50,9 @@ pub struct SocketPacket {
     method: Type,
 }
 
-/// The size of the buffer for each address of an accepted connection.
-///
-/// `AcceptEx` needs 16 more bytes than the size of the address.
 const ADDRESS_LENGTH: usize = size_of::<SOCKADDR_STORAGE>() + 16;
 
 impl SocketPacket {
-    /// Creates a new packet with a buffer of the provided capacity, or without any buffer if the capacity is `0`.
-    ///
-    /// A read operation with a packet without buffer does **not** receive any bytes, it **only** completes once bytes
-    /// can be received.
-    ///
-    /// # Arguments
-    ///
-    /// - `capacity` — The capacity of the buffer
-    ///
-    /// # See also
-    ///
-    /// - [`wrap`](Self::wrap)
     pub fn new(capacity: usize) -> Box<Self> {
         if capacity == 0 {
             Self::wrap(Vec::new())
@@ -99,18 +61,6 @@ impl SocketPacket {
         }
     }
 
-    /// Creates a new packet with the provided buffers.
-    ///
-    /// A write operation sends the bytes of **all** buffers in order, a read operation **only** uses the free capacity
-    /// of the first buffer.
-    ///
-    /// # Arguments
-    ///
-    /// - `buffers` — The buffers of the packet
-    ///
-    /// # See also
-    ///
-    /// - [`new`](Self::new)
     pub fn wrap(buffers: Vec<BytesMut>) -> Box<Self> {
         Box::new(Self {
             overlapped: unsafe { mem::zeroed() },
@@ -126,12 +76,10 @@ impl SocketPacket {
         &self.buffers[0]
     }
 
-    /// The amount of bytes, which have been sent or received.
     pub fn length(&self) -> usize {
         self.length
     }
 
-    /// The type of the operation.
     pub fn method(&self) -> Type {
         self.method
     }
@@ -141,18 +89,6 @@ impl SocketPacket {
         self.buffers.into_iter().next().unwrap_or_default()
     }
 
-    /// Removes the sent bytes from the buffers.
-    ///
-    /// Each buffer, which has been sent completely, is removed, while a buffer, which has been sent only in part,
-    /// keeps its remaining bytes. The amount of sent bytes is reset to `0`.
-    ///
-    /// # Returns
-    ///
-    /// `true` if some bytes have not been sent yet.
-    ///
-    /// # See also
-    ///
-    /// - [`write`](fn@write)
     pub(crate) fn reallocate(&mut self) -> bool {
         let mut length = mem::take(&mut self.length);
         for buffer in &mut self.buffers {
@@ -164,30 +100,10 @@ impl SocketPacket {
         !self.buffers.is_empty()
     }
 
-    /// Returns the packet of the provided completed operation, or the error of the operation.
-    ///
-    /// The packet is held by the caller again. For a read operation, the received bytes are added to the first
-    /// buffer.
-    ///
     /// # Safety
     ///
-    /// The entry **must** have been returned by [`SocketQueueManager::poll`](crate::handle::SocketQueueManager::poll) for
-    /// an operation, which has been scheduled with [`read`], [`write`](fn@write), [`accept`] or [`connect`] of this
-    /// module. Each entry **must** only be handled once, as its packet is released by this call. An entry without
-    /// packet, see [`SocketQueueManager::enqueue`](crate::handle::SocketQueueManager::enqueue), **must not** be provided.
-    ///
-    /// # Arguments
-    ///
-    /// - `entry` — The completed operation
-    ///
-    /// # Errors
-    ///
-    /// Returns the error of the operation, for example if the socket has been closed while the operation was
-    /// pending. The packet is released in this case.
-    ///
-    /// # Returns
-    ///
-    /// The packet of the operation.
+    /// `entry` must come from [`SocketQueueManager::poll`](crate::handle::SocketQueueManager::poll), hold a packet
+    /// submitted by this module, and be handled only once.
     pub(crate) unsafe fn handle_success(entry: &OVERLAPPED_ENTRY) -> io::Result<Box<Self>> {
         let data = unsafe { Box::from_raw(entry.lpOverlapped as *mut Self) };
         let status = data.overlapped.Internal as NTSTATUS;
@@ -200,18 +116,6 @@ impl SocketPacket {
         }
     }
 
-    /// Updates the packet with the amount of sent or received bytes.
-    ///
-    /// For a read operation, the received bytes are added to the first buffer.
-    ///
-    /// # Arguments
-    ///
-    /// - `packet` — The packet of the operation
-    /// - `entry` — The completed operation
-    ///
-    /// # Returns
-    ///
-    /// The updated packet.
     fn on_success(
         mut packet: Box<SocketPacket>,
         entry: &OVERLAPPED_ENTRY,
@@ -227,24 +131,6 @@ impl SocketPacket {
     }
 }
 
-/// Schedules a read operation for the provided socket.
-///
-/// The packet is held by the operation until it has completed. **Only** the free capacity of the first buffer is used,
-/// a packet without buffer does **not** receive any bytes, the operation **only** completes once bytes can be received.
-///
-/// # Arguments
-///
-/// - `socket` — The registered socket
-/// - `packet` — The packet, which receives the bytes
-///
-/// # Errors
-///
-/// Returns an error if the operation could not be started, the packet is released in this case.
-///
-/// # See also
-///
-/// - [`write`](fn@write)
-/// - [`ChannelManager::read`](crate::handle::ChannelManager::read)
 pub(crate) fn read<S: AsRawSocket>(socket: &S, packet: Box<SocketPacket>) -> io::Result<()> {
     submit(packet, Type::Read, |buffers, overlapped| {
         let mut flags = 0;
@@ -262,24 +148,6 @@ pub(crate) fn read<S: AsRawSocket>(socket: &S, packet: Box<SocketPacket>) -> io:
     })
 }
 
-/// Schedules a write operation for the provided socket.
-///
-/// The packet is held by the operation until it has completed. The bytes of all buffers are sent in order, the
-/// operation *may* complete once only a part of the bytes has been sent, see [`SocketPacket::reallocate`].
-///
-/// # Arguments
-///
-/// - `socket` — The registered socket
-/// - `packet` — The packet with the bytes to send
-///
-/// # Errors
-///
-/// Returns an error if the operation could not be started, the packet is released in this case.
-///
-/// # See also
-///
-/// - [`read`]
-/// - [`ChannelManager::write`](crate::handle::ChannelManager::write)
 pub(crate) fn write<S: AsRawSocket>(socket: &S, packet: Box<SocketPacket>) -> io::Result<()> {
     submit(packet, Type::Write, |buffers, overlapped| unsafe {
         WSASend(
@@ -294,26 +162,6 @@ pub(crate) fn write<S: AsRawSocket>(socket: &S, packet: Box<SocketPacket>) -> io
     })
 }
 
-/// Schedules an accept operation for the provided socket.
-///
-/// A new socket for the connection is created with the same IP version as the provided socket and is held by the
-/// packet, together with the local and remote address of the connection. Once the operation has completed, the
-/// connection can be retrieved with [`accepted`].
-///
-/// # Arguments
-///
-/// - `listener` — The registered and bound socket
-///
-/// # Errors
-///
-/// Returns an error:
-/// - If the local address of the provided socket could not be retrieved
-/// - If the new socket could not be created
-/// - If the operation could not be started
-///
-/// # See also
-///
-/// - [`ChannelManager::accept`](crate::handle::ChannelManager::accept)
 pub(crate) fn accept(listener: &TcpListener) -> io::Result<()> {
     let connect_node = socket(listener.local_addr()?.is_ipv4())?;
     let socket = connect_node.as_raw_socket() as SOCKET;
@@ -337,25 +185,6 @@ pub(crate) fn accept(listener: &TcpListener) -> io::Result<()> {
     })
 }
 
-/// Returns the accepted connection of the provided packet.
-///
-/// The connection is updated with the provided socket (`SO_UPDATE_ACCEPT_CONTEXT`), so that functions like
-/// [`TcpStream::peer_addr`] can be used.
-///
-/// # Arguments
-///
-/// - `listener` — The bound socket, which has accepted the connection
-/// - `packet` — The packet of the completed accept operation
-///
-/// # Errors
-///
-/// Returns:
-/// - [`InvalidInput`](io::ErrorKind::InvalidInput) if the packet does not hold a connection
-/// - An error if the connection could not be updated, the connection is closed in this case
-///
-/// # See also
-///
-/// - [`accept`]
 pub fn accepted(listener: &TcpListener, mut packet: SocketPacket) -> io::Result<TcpStream> {
     let socket = packet.socket.take().ok_or(io::ErrorKind::InvalidInput)?;
     let parent = listener.as_raw_socket() as SOCKET;
@@ -375,27 +204,6 @@ pub fn accepted(listener: &TcpListener, mut packet: SocketPacket) -> io::Result<
     }
 }
 
-/// Schedules a connect operation to the provided address.
-///
-/// The socket **must not** be bound yet, it is bound to any local address of the same IP version first, as `ConnectEx`
-/// requires a bound socket. The packet holds the address until the operation has completed. Once completed,
-/// [`connected`](crate::handle::socket::connected) **must** be called *before* the socket can be used.
-///
-/// # Arguments
-///
-/// - `stream` — The registered socket, which is not bound yet
-/// - `address` — The address to connect to
-///
-/// # Errors
-///
-/// Returns:
-/// - An error if the socket could not be bound
-/// - [`Unsupported`](io::ErrorKind::Unsupported) if `ConnectEx` is not available
-/// - An error if the operation could not be started
-///
-/// # See also
-///
-/// - [`ChannelManager::connect`](crate::handle::ChannelManager::connect)
 pub(crate) fn connect(stream: &TcpStream, address: &SocketAddr) -> io::Result<()> {
     let socket = stream.as_raw_socket() as SOCKET;
     let local = if address.is_ipv4() {
@@ -445,23 +253,6 @@ pub(crate) fn connect(stream: &TcpStream, address: &SocketAddr) -> io::Result<()
     )
 }
 
-/// Schedules the operation of the provided packet.
-///
-/// The packet is held by Windows until the operation has completed, it is returned by
-/// [`SocketPacket::handle_success`]. Even if the operation completes at once, it is returned by the
-/// [`SocketQueueManager`](crate::handle::SocketQueueManager). The `call` gets the buffers of the packet and its
-/// `OVERLAPPED`: a read or accept operation **only** gets the free capacity of the first buffer, a write or connect
-/// operation gets the bytes of **all** buffers.
-///
-/// # Arguments
-///
-/// - `packet` — The packet of the operation
-/// - `method` — The type of the operation
-/// - `call` — The function, which starts the operation
-///
-/// # Errors
-///
-/// Returns the error of `call`, if it is not `WSA_IO_PENDING`. The packet is released in this case.
 fn submit<F>(mut packet: Box<SocketPacket>, method: Type, call: F) -> io::Result<()>
 where
     F: FnOnce(&[WSABUF], *mut OVERLAPPED) -> i32,

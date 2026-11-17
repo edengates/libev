@@ -30,10 +30,8 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-/// The core of libev. Acts as a manager for all channels: it binds sockets with [`bind`](Self::bind) and connects to
-/// remote peers with [`connect`](Self::connect).
-///
-/// **Note:** Cloning is cheap, **all** clones share the same channels and thread managers.
+/// The core of libev. Acts as a manager for all channels. It binds sockets with [`bind`](Self::bind) and connects to
+/// peers with [`connect`](Self::connect).
 ///
 /// To create new instances use the [`DefaultSocketManagerBuilder`](crate::DefaultSocketManagerBuilder).
 #[derive(Clone)]
@@ -41,7 +39,6 @@ pub struct SocketManager {
     inner: Arc<SocketManagerImpl>,
 }
 
-/// Holds the configuration of a [`SocketManager`], all copies of it use the same configuration.
 struct SocketManagerImpl {
     threading_config: ThreadingConfig,
     socket_config: SocketConfig,
@@ -50,13 +47,6 @@ struct SocketManagerImpl {
 }
 
 impl SocketManager {
-    /// Creates a new instance with the provided configuration.
-    ///
-    /// # Arguments
-    ///
-    /// - `threading_config` — The [`ThreadingConfig`] to use
-    /// - `socket_config` — The [`SocketConfig`] to use
-    /// - `provider` — The [`EventManagerProvider`] used to create the [`EventTask`] of each channel
     pub(crate) fn new(
         threading_config: ThreadingConfig,
         socket_config: SocketConfig,
@@ -72,199 +62,106 @@ impl SocketManager {
         }
     }
 
-    /// [`ScheduledThreadManager`] used for the channels created by [`connect`](Self::connect) and the accepted
-    /// connections.
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_worker_pool`](crate::DefaultSocketManagerBuilder::set_worker_pool)
+    /// The pool used for the channels created by [`connect`](Self::connect) and for the accepted connections.
     pub fn worker_pool(&self) -> &ScheduledThreadManager<SingleThreadManager> {
         self.inner.threading_config.worker_pool()
     }
 
-    /// [`ScheduledThreadManager`] used for the sockets bound by [`bind`](Self::bind).
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_socket_pool`](crate::DefaultSocketManagerBuilder::set_socket_pool)
+    /// The pool used for the sockets bound by [`bind`](Self::bind).
     pub fn socket_pool(&self) -> &ScheduledThreadManager<SingleThreadManager> {
         self.inner.threading_config.socket_pool()
     }
 
-    /// The backlog value used when [`bind`](Self::bind) binds to a local address.
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_backlog`](crate::DefaultSocketManagerBuilder::set_backlog)
+    /// The `listen(2)` backlog of the sockets bound by [`bind`](Self::bind).
     pub fn backlog(&self) -> i32 {
         self.inner.threading_config.backlog()
     }
 
     /// The maximum number of connections to accept per read loop.
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_concurrency`](crate::DefaultSocketManagerBuilder::set_concurrency)
     pub fn concurrency(&self) -> usize {
         self.inner.threading_config.concurrency()
     }
 
-    /// The size, in bytes, of the buffer used for reading messages.
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_buffer_size`](crate::DefaultSocketManagerBuilder::set_buffer_size)
+    /// The read buffer size in bytes.
     pub fn buffer_size(&self) -> usize {
         self.inner.threading_config.buffer_size()
     }
 
-    /// The amount of time that libev will stop to accept new connections after an error.
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_reconnect_delay`](crate::DefaultSocketManagerBuilder::set_reconnect_delay)
+    /// How long libev stops accepting after the first error.
     pub fn reconnect_delay(&self) -> Duration {
         self.inner.threading_config.reconnect_delay()
     }
 
-    /// The maximum amount of time that libev will back off to wait when attempting to accept new connections again.
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_max_reconnect_delay`][set_max_reconnect_delay]
-    ///
-    /// [set_max_reconnect_delay]: crate::DefaultSocketManagerBuilder::set_max_reconnect_delay
+    /// The upper limit of the [`reconnect_delay`](Self::reconnect_delay).
     pub fn max_reconnect_delay(&self) -> Duration {
         self.inner.threading_config.max_reconnect_delay()
     }
 
-    /// The low water mark for the write buffer of each channel.
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_threshold`](crate::DefaultSocketManagerBuilder::set_threshold)
+    /// The low water mark of the write buffer, where slow mode ends.
     pub fn threshold(&self) -> usize {
         self.inner.threading_config.threshold()
     }
 
-    /// The high water mark for the write buffer of each channel.
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_large_threshold`](crate::DefaultSocketManagerBuilder::set_large_threshold)
+    /// The high water mark of the write buffer, where slow mode starts.
     pub fn large_threshold(&self) -> usize {
         self.inner.threading_config.large_threshold()
     }
 
-    /// The maximum amount of time to wait until the thread managers are shut down on [`shutdown`](Self::shutdown).
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_shutdown_timeout`]
-    ///
-    /// [`DefaultSocketManagerBuilder::set_shutdown_timeout`]: crate::DefaultSocketManagerBuilder::set_shutdown_timeout
+    /// How long [`shutdown`](Self::shutdown) waits for open connections.
     pub fn shutdown_timeout(&self) -> Duration {
         self.inner.threading_config.shutdown_timeout()
     }
 
     /// The maximum number of chunks to read per read loop.
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_chunk_limit`](crate::DefaultSocketManagerBuilder::set_chunk_limit)
     pub fn chunk_limit(&self) -> usize {
         self.inner.threading_config.chunk_limit()
     }
 
-    /// The maximum number of messages to write at once.
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_packet_limit`](crate::DefaultSocketManagerBuilder::set_packet_limit)
+    /// The maximum number of messages per gathering write.
     pub fn packet_limit(&self) -> usize {
         self.inner.threading_config.packet_limit()
     }
 
-    /// Whether `TCP_NODELAY` is enabled (Nagle's algorithm is disabled).
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_tcp_no_delay`](crate::DefaultSocketManagerBuilder::set_tcp_no_delay)
+    /// Gets the value of the `TCP_NODELAY` option used for each connection.
     pub fn tcp_no_delay(&self) -> bool {
         self.inner.socket_config.tcp_no_delay()
     }
 
-    /// The linger time used with `SO_LINGER`, or `None` if disabled.
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_close_timeout`](crate::DefaultSocketManagerBuilder::set_close_timeout)
+    /// The `SO_LINGER` time, or `None` if disabled.
     pub fn close_timeout(&self) -> Option<Duration> {
         self.inner.socket_config.close_timeout()
     }
 
-    /// The connect timeout of the channels created by [`connect`](Self::connect).
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_connect_timeout`](crate::DefaultSocketManagerBuilder::set_connect_timeout)
+    /// The connect timeout of [`connect`](Self::connect).
     pub fn connect_timeout(&self) -> Duration {
         self.inner.socket_config.connect_timeout()
     }
 
-    /// The amount of time without read or write after which a [`ChannelTimeoutEvent`] is fired, or `None` if disabled.
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_afk_timeout`](crate::DefaultSocketManagerBuilder::set_afk_timeout)
-    ///
-    /// [`ChannelTimeoutEvent`]: crate::events::channel::ChannelTimeoutEvent
+    /// The AFK timeout of each channel, or `None` if disabled.
     pub fn afk_timeout(&self) -> Option<Duration> {
         self.inner.socket_config.afk_timeout()
     }
 
-    /// Whether `SO_REUSEPORT` is enabled for the sockets bound by [`bind`](Self::bind).
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_address_shared`](crate::DefaultSocketManagerBuilder::set_address_shared)
+    /// Whether `SO_REUSEPORT` is set on the sockets bound by [`bind`](Self::bind).
     pub fn is_address_shared(&self) -> bool {
         self.inner.socket_config.is_address_shared()
     }
 
-    /// Whether IPv4 connections are enabled on IPv6 sockets bound by [`bind`](Self::bind).
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_fallback_enabled`]
-    ///
-    /// [`DefaultSocketManagerBuilder::set_fallback_enabled`]: crate::DefaultSocketManagerBuilder::set_fallback_enabled
+    /// Whether the IPv6 sockets bound by [`bind`](Self::bind) also accept IPv4.
     pub fn is_fallback_enabled(&self) -> bool {
         self.inner.socket_config.is_fallback_enabled()
     }
 
-    /// The maximum amount of time that the listeners of a closed channel may still run.
-    ///
-    /// # See also
-    ///
-    /// - [`DefaultSocketManagerBuilder::set_timeout`](crate::DefaultSocketManagerBuilder::set_timeout)
+    /// How long the listeners of a closed channel may still run.
     pub fn timeout(&self) -> Duration {
         self.inner.socket_config.timeout()
     }
 
-    /// The data mappings to use in this [`SocketManager`].
-    ///
-    /// The same map is shared by **all** channels of this [`SocketManager`].
+    /// The data mappings to use in this [`SocketManager`], shared by all its channels.
     pub fn context_map(&self) -> &RwLock<HashMap<String, Arc<dyn Any + Send + Sync>>> {
         &self.inner.context_map
     }
 
-    /// Creates the [`EventTask`] of a new channel with the provided queue of messages and queue of events.
-    ///
-    /// # Arguments
-    ///
-    /// - `buffer` — The queue of messages, which have to be sent to the socket
-    /// - `inbound` — The queue of events
     pub(crate) fn task(
         &self,
         buffer: &Rc<RefCell<SocketBufferQueue>>,
@@ -273,29 +170,15 @@ impl SocketManager {
         (self.inner.provider)(self, buffer, inbound)
     }
 
-    /// Creates a new socket and binds it to the provided address.
+    /// Creates a new socket, which will be bound to the specified address, and returns its local address.
     ///
-    /// The socket is handled by the [`socket_pool`](Self::socket_pool), the accepted connections by the
-    /// [`worker_pool`](Self::worker_pool).
-    ///
-    /// # Arguments
-    ///
-    /// - `address` — The local address to bind to
+    /// Binding with a port number of 0 will request that the OS assigns a port to this socket, the returned address
+    /// has it. Only the first address yielded by `address` is used. The socket is handled by the
+    /// [`socket_pool`](Self::socket_pool), the accepted connections by the [`worker_pool`](Self::worker_pool).
     ///
     /// # Errors
     ///
-    /// Returns an error:
-    /// - If the address could not be resolved
-    /// - If the socket could not be bound
-    ///
-    /// # Returns
-    ///
-    /// The local address of the socket, which is useful when binding to port `0`.
-    ///
-    /// # See also
-    ///
-    /// - [`connect`](Self::connect)
-    /// - [`DefaultSocketManagerBuilder::set_socket_pool`](crate::DefaultSocketManagerBuilder::set_socket_pool)
+    /// Returns an error if the address could not be resolved or the socket could not be bound.
     pub fn bind<A: ToSocketAddrs>(&self, address: A) -> io::Result<SocketAddr> {
         let address = address
             .to_socket_addrs()?
@@ -314,27 +197,14 @@ impl SocketManager {
         Ok(address)
     }
 
-    /// Connects a new channel to the remote peer.
+    /// Connects a new channel to the peer.
     ///
-    /// **This returns once the connection process has started.** When the connection is established a
-    /// [`ChannelReadyEvent`] is fired, if it is **not** established in the [`connect_timeout`](Self::connect_timeout)
-    /// the channel is closed.
-    ///
-    /// # Arguments
-    ///
-    /// - `address` — The address of the remote peer
+    /// Returns once the connection process has started. When the connection is established a [`ChannelReadyEvent`]
+    /// is fired, if not within the [`connect_timeout`](Self::connect_timeout) the channel is closed.
     ///
     /// # Errors
     ///
-    /// Returns an error:
-    /// - If the address could not be resolved
-    /// - If the connection process could not be started
-    ///
-    /// # See also
-    ///
-    /// - [`bind`](Self::bind)
-    /// - [`ChannelReadyEvent`]
-    /// - [`DefaultSocketManagerBuilder::set_connect_timeout`](crate::DefaultSocketManagerBuilder::set_connect_timeout)
+    /// Returns an error if the address could not be resolved or the connection process could not be started.
     ///
     /// [`ChannelReadyEvent`]: crate::events::channel::ChannelReadyEvent
     pub fn connect<A: ToSocketAddrs>(&self, address: A) -> io::Result<()> {
@@ -350,82 +220,34 @@ impl SocketManager {
 
     /// Shuts down this [`SocketManager`], closing all its connections.
     ///
-    /// <div class="warning">
-    ///
-    /// After this command is issued the [`SocketManager`] can **not** be used anymore.
-    ///
-    /// </div>
-    ///
-    /// Already enqueued messages are still going to be sent, until the [`shutdown_timeout`](Self::shutdown_timeout) has
-    /// elapsed.
-    ///
-    /// If you want this instance to shutdown without sending, use [`shutdown_now`](Self::shutdown_now).
-    ///
-    /// # See also
-    ///
-    /// - [`shutdown_now`](Self::shutdown_now)
-    /// - [`await_shutdown`](Self::await_shutdown)
+    /// After this command is issued the [`SocketManager`] can not be used anymore. Already enqueued messages are still
+    /// going to be sent, for at most the [`shutdown_timeout`](Self::shutdown_timeout). If you want this instance to
+    /// shut down without sending, use [`shutdown_now`](Self::shutdown_now).
     pub fn shutdown(&self) {
         self.inner.threading_config.shutdown()
     }
 
     /// Shuts down this [`SocketManager`] instantly, closing all its connections.
     ///
-    /// <div class="warning">
-    ///
-    /// After this command is issued the [`SocketManager`] can **not** be used anymore.
-    ///
-    /// </div>
-    ///
-    /// This will also cancel **all** queued messages.
-    ///
-    /// If you want this instance to shutdown without cancelling enqueued messages, use [`shutdown`](Self::shutdown).
+    /// This will also cancel all queued messages. If you want this instance to shut down without canceling enqueued
+    /// messages, use [`shutdown`](Self::shutdown).
     ///
     /// # Errors
     ///
     /// Returns an error if one of the shards could not be shut down.
-    ///
-    /// # See also
-    ///
-    /// - [`shutdown`](Self::shutdown)
-    /// - [`await_shutdown`](Self::await_shutdown)
     pub fn shutdown_now(&self) -> io::Result<()> {
         self.inner.threading_config.shutdown_now()
     }
 
     /// Blocks the current thread until the shutdown has completed.
     ///
-    /// **This will not implicitly call [`shutdown`](Self::shutdown), you are responsible to ensure that the
-    /// shutdown process has started.**
-    ///
-    /// # Arguments
-    ///
-    /// - `timeout` — The maximum time to wait
-    ///
-    /// # Returns
-    ///
-    /// `false`, if the timeout has elapsed before the shutdown has completed, `true` otherwise.
-    ///
-    /// # See also
-    ///
-    /// - [`shutdown`](Self::shutdown)
-    /// - [`shutdown_now`](Self::shutdown_now)
+    /// This will not implicitly call [`shutdown`](Self::shutdown), you are responsible to ensure that the shutdown
+    /// process has started. Returns `false` if the `timeout` elapsed first.
     pub fn await_shutdown(&self, timeout: Duration) -> bool {
         self.inner.threading_config.await_shutdown(timeout)
     }
 }
 
-/// Blocks the current thread until the provided operation has completed.
-///
-/// # Arguments
-///
-/// - `data` — The [`Receiver`], which receives the result once the operation completes
-///
-/// # Errors
-///
-/// Returns an error:
-/// - The error of the operation
-/// - [`BrokenPipe`](io::ErrorKind::BrokenPipe) if the thread manager has been shutdown
 fn sync(data: Receiver<io::Result<()>>) -> io::Result<()> {
     data.recv().map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))?
 }

@@ -16,15 +16,9 @@
 
 use crate::events::GenericEvent;
 
-/// Indicates that a [`MessageChannel`] has been disconnected from the remote server.
-///
-/// # See also
-///
-/// - [`ListenerAdapter::on_channel_disconnect`]
-/// - [`DefaultSocketManagerBuilder::set_timeout`](crate::DefaultSocketManagerBuilder::set_timeout)
+/// Indicates that a [`MessageChannel`] has been disconnected from the peer.
 ///
 /// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
-/// [`ListenerAdapter::on_channel_disconnect`]: crate::hooks::ListenerAdapter::on_channel_disconnect
 pub struct ChannelDisconnectEvent;
 
 impl GenericEvent for ChannelDisconnectEvent {}
