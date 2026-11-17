@@ -2,7 +2,9 @@
 name = "libev"
 version = "0.1.0"
 edition = "2024"
+description = "A Rust I/O library for the event-driven asynchronous network applications"
 license = "Apache-2.0"
+repository = "https://github.com/java-nio-toolkit/libev"
 
 [dependencies]
 bytes = "1.12.1"
