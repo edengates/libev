@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-use crate::handle::Channel;
 use crate::handle::event::Event;
 use crate::handle::socket::{last_error, socket, socket_address};
 use crate::handle::CompletionService;
@@ -26,6 +25,7 @@ use std::mem;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::os::windows::io::AsRawSocket;
 use std::ptr;
+use std::sync::OnceLock;
 use windows_sys::Win32::Networking::WinSock::{
     AcceptEx, LPFN_CONNECTEX, SIO_GET_EXTENSION_FUNCTION_POINTER, SOCKADDR_STORAGE, SOCKET, SOCKET_ERROR, WSABUF,
     WSAID_CONNECTEX, WSAIoctl, WSARecv, WSASend,
@@ -36,8 +36,8 @@ use windows_sys::core::GUID;
 const ADDRESS_LENGTH: usize = size_of::<SOCKADDR_STORAGE>() + 16;
 
 pub struct EventArray {
-    pub(in crate::handle) entries: Vec<OVERLAPPED_ENTRY>,
-    pub(in crate::handle) response_total: usize,
+    pub(crate) entries: Vec<OVERLAPPED_ENTRY>,
+    pub(crate) response_total: usize,
 }
 
 impl EventArray {
@@ -62,7 +62,7 @@ impl ScheduledExecutorService {
         data.map(|_| ())
     }
 
-    pub fn read<S: AsRawSocket>(&mut self, socket: &S, packet: Box<Event>) -> io::Result<()> {
+    pub(crate) fn read<S: AsRawSocket>(&mut self, socket: &S, packet: Box<Event>) -> io::Result<()> {
         self.submit(packet, Event::READ, |buffers, overlapped| {
             let mut flags = 0;
             unsafe {
@@ -79,7 +79,7 @@ impl ScheduledExecutorService {
         })
     }
 
-    pub fn write<S: AsRawSocket>(&mut self, socket: &S, packet: Box<Event>) -> io::Result<()> {
+    pub(crate) fn write<S: AsRawSocket>(&mut self, socket: &S, packet: Box<Event>) -> io::Result<()> {
         self.submit(packet, Event::WRITE, |buffers, overlapped| unsafe {
             WSASend(
                 socket.as_raw_socket() as SOCKET,
@@ -93,17 +93,17 @@ impl ScheduledExecutorService {
         })
     }
 
-    pub fn accept(&mut self, listener: &TcpListener) -> io::Result<()> {
-        let connect_node = socket(listener.local_addr()?.is_ipv4())?;
-        let socket = connect_node.as_raw_socket() as SOCKET;
+    pub(crate) fn accept(&mut self, listener: &TcpListener) -> io::Result<()> {
+        let socket = socket(listener.local_addr()?.is_ipv4())?;
+        let raw = socket.as_raw_socket() as SOCKET;
         let mut packet = Event::new(2 * ADDRESS_LENGTH);
-        packet.set_socket(connect_node.into());
+        packet.set_socket(socket.into());
         self.submit(packet, Event::ACCEPT, |buffers, overlapped| {
             let mut received = 0;
             let data = unsafe {
                 AcceptEx(
                     listener.as_raw_socket() as SOCKET,
-                    socket,
+                    raw,
                     buffers[0].buf.cast(),
                     0,
                     ADDRESS_LENGTH as u32,
@@ -116,7 +116,7 @@ impl ScheduledExecutorService {
         })
     }
 
-    pub fn connect(&mut self, stream: &TcpStream, address: &SocketAddr) -> io::Result<()> {
+    pub(crate) fn connect(&mut self, stream: &TcpStream, address: &SocketAddr) -> io::Result<()> {
         let socket = stream.as_raw_socket() as SOCKET;
         let local = if address.is_ipv4() {
             SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0)
@@ -124,26 +124,7 @@ impl ScheduledExecutorService {
             SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 0)
         };
         SockRef::from(stream).bind(&SockAddr::from(local))?;
-
-        let mut function: LPFN_CONNECTEX = None;
-        let mut returned = 0;
-        let data = unsafe {
-            WSAIoctl(
-                socket,
-                SIO_GET_EXTENSION_FUNCTION_POINTER,
-                (&WSAID_CONNECTEX as *const GUID).cast(),
-                size_of::<GUID>() as u32,
-                (&mut function as *mut LPFN_CONNECTEX).cast(),
-                size_of::<LPFN_CONNECTEX>() as u32,
-                &mut returned,
-                ptr::null_mut(),
-                None,
-            )
-        };
-        if data == SOCKET_ERROR {
-            return Err(last_error());
-        }
-        let function = function.ok_or(io::ErrorKind::Unsupported)?;
+        let function = connect_ex(socket)?.ok_or(io::ErrorKind::Unsupported)?;
 
         self.submit(
             Event::wrap(vec![socket_address(address)]),
@@ -180,47 +161,70 @@ impl ScheduledExecutorService {
             return;
         }
         self.array.response_total -= 1;
-        let data = unsafe { Event::handle_success(entry) };
+        let data = unsafe { Event::from_entry(entry) };
         self.handle_event(entry.lpCompletionKey, |handle, manager| match data {
             Ok(mut packet) if packet.opcode() == Event::WRITE => {
-                if packet.reallocate() {
+                if packet.advance() {
                     manager.write(&handle.socket(), packet).is_ok()
                 } else {
-                    matches!(handle.handle(manager, Ok(*packet)), Ok(true))
+                    handle.handle(manager, Ok(*packet)).unwrap_or(false)
                 }
             }
-            data => matches!(handle.handle(manager, data.map(|packet| *packet)), Ok(true)),
+            data => handle.handle(manager, data.map(|packet| *packet)).unwrap_or(false),
         });
     }
 
     /// If the port fails here, the packets still in flight are leaked.
     pub(crate) fn close(&mut self) {
         let mut entries = mem::take(&mut self.array.entries);
-        let sockets: Vec<(usize, Box<dyn Channel>)> = self.sockets.drain().collect();
-        for (key, handle) in sockets {
-            self.close_resource(key, handle);
-        }
+        self.close_sockets();
         while self.array.response_total > 0 {
             let count = match self.port.poll(&mut entries, u32::MAX) {
                 Ok(count) => count,
                 Err(error) => {
-                    error!(error:% = error; "Encountered error in gateway worker");
+                    error!(error:% = error; "Encountered error in socket worker");
                     return;
                 }
             };
             for entry in &entries[..count] {
                 if !entry.lpOverlapped.is_null() {
                     self.array.response_total -= 1;
-                    drop(unsafe { Event::handle_success(entry) });
+                    drop(unsafe { Event::from_entry(entry) });
                 }
             }
         }
     }
 }
 
+fn connect_ex(socket: SOCKET) -> io::Result<LPFN_CONNECTEX> {
+    static CONNECT_EX: OnceLock<LPFN_CONNECTEX> = OnceLock::new();
+    if let Some(function) = CONNECT_EX.get() {
+        return Ok(*function);
+    }
+    let mut function: LPFN_CONNECTEX = None;
+    let mut returned = 0;
+    let data = unsafe {
+        WSAIoctl(
+            socket,
+            SIO_GET_EXTENSION_FUNCTION_POINTER,
+            (&WSAID_CONNECTEX as *const GUID).cast(),
+            size_of::<GUID>() as u32,
+            (&mut function as *mut LPFN_CONNECTEX).cast(),
+            size_of::<LPFN_CONNECTEX>() as u32,
+            &mut returned,
+            ptr::null_mut(),
+            None,
+        )
+    };
+    if data == SOCKET_ERROR {
+        return Err(last_error());
+    }
+    Ok(*CONNECT_EX.get_or_init(|| function))
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::DefaultSocketManagerBuilder;
+    use crate::{DefaultSocketManagerBuilder, SocketManager};
     use crate::hooks::ListenerAdapter;
     use crate::utils::concurrent::ScheduledThreadPoolExecutor;
     use crate::handle::{ServerSocketChannel, SocketChannel, socket};
@@ -254,6 +258,17 @@ mod tests {
         ScheduledExecutorService::new(Arc::new(CompletionService::new().unwrap()), 64)
     }
 
+    fn socket_manager<F>(configure: F) -> SocketManager
+    where
+        F: FnOnce(DefaultSocketManagerBuilder) -> DefaultSocketManagerBuilder,
+    {
+        configure(DefaultSocketManagerBuilder::new())
+            .set_socket_pool(ScheduledThreadPoolExecutor::new(1, 64).unwrap())
+            .add_event_listener(GenericEventAdapter)
+            .build()
+            .unwrap()
+    }
+
     fn connect_node(port: &CompletionService) -> (TcpStream, TcpStream) {
         let listener = listener();
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -266,7 +281,7 @@ mod tests {
         let mut entries: [OVERLAPPED_ENTRY; 4] = unsafe { mem::zeroed() };
         assert_eq!(port.poll(&mut entries, 1000)?, 1);
         assert_eq!(entries[0].lpCompletionKey, 2);
-        unsafe { Event::handle_success(&entries[0]) }
+        unsafe { Event::from_entry(&entries[0]) }
     }
 
     #[test]
@@ -355,17 +370,17 @@ mod tests {
 
     #[test]
     fn reconnect_delay() {
-        let socket_manager = DefaultSocketManagerBuilder::new()
-            .set_socket_pool(ScheduledThreadPoolExecutor::new(1, 64, crate::handle::DefaultHandler::new_factory()).unwrap())
-            .add_event_listener(GenericEventAdapter)
-            .set_reconnect_delay(Duration::from_millis(40))
-            .set_max_reconnect_delay(Duration::from_millis(100))
-            .build()
-            .unwrap();
+        let socket_manager = socket_manager(|builder| {
+            builder
+                .set_reconnect_delay(Duration::from_millis(40))
+                .set_max_reconnect_delay(Duration::from_millis(100))
+        });
         listener();
-        let socket = unsafe { WSASocketW(AF_INET as i32, SOCK_STREAM, IPPROTO_TCP, ptr::null(), 0, WSA_FLAG_OVERLAPPED) };
+        let socket = unsafe {
+            WSASocketW(AF_INET as i32, SOCK_STREAM, IPPROTO_TCP, ptr::null(), 0, WSA_FLAG_OVERLAPPED)
+        };
         let unbound = unsafe { TcpListener::from_raw_socket(socket as RawSocket) };
-        let mut manager = ScheduledExecutorService::new(Arc::new(CompletionService::new().unwrap()), 64);
+        let mut manager = manager();
         manager.register(Box::new(ServerSocketChannel::new(unbound, socket_manager))).unwrap();
 
         for expected in [40, 80, 100, 100] {
@@ -379,15 +394,10 @@ mod tests {
 
     #[test]
     fn connect_timeout() {
-        let socket_manager = DefaultSocketManagerBuilder::new()
-            .set_socket_pool(ScheduledThreadPoolExecutor::new(1, 64, crate::handle::DefaultHandler::new_factory()).unwrap())
-            .add_event_listener(GenericEventAdapter)
-            .set_connect_timeout(Duration::from_millis(50))
-            .build()
-            .unwrap();
+        let socket_manager = socket_manager(|builder| builder.set_connect_timeout(Duration::from_millis(50)));
         let address = listener().local_addr().unwrap();
         let channel = SocketChannel::connect(socket::client(&address).unwrap(), address, socket_manager);
-        let mut manager = ScheduledExecutorService::new(Arc::new(CompletionService::new().unwrap()), 64);
+        let mut manager = manager();
         manager.register(Box::new(channel)).unwrap();
         assert_eq!(manager.sockets.len(), 1);
 

@@ -15,6 +15,8 @@
  */
 
 use bytes::BytesMut;
+#[cfg(unix)]
+use bytes::Buf;
 use std::{io, mem};
 
 #[derive(Default)]
@@ -103,9 +105,37 @@ impl Buffer {
     }
 }
 
+#[cfg(unix)]
+pub(crate) fn advance(buffers: &mut Vec<BytesMut>, mut length: usize) {
+    let count = buffers
+        .iter()
+        .take_while(|buffer| {
+            let is_written = buffer.len() <= length;
+            if is_written {
+                length -= buffer.len();
+            }
+            is_written
+        })
+        .count();
+    buffers.drain(..count);
+    if let Some(buffer) = buffers.first_mut() {
+        buffer.advance(length);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn advance() {
+        let mut buffers = vec![BytesMut::from(&b"pi"[..]), BytesMut::from(&b"ng"[..])];
+        super::advance(&mut buffers, 3);
+        assert_eq!(buffers, [BytesMut::from(&b"g"[..])]);
+        super::advance(&mut buffers, 1);
+        assert!(buffers.is_empty());
+    }
 
     #[test]
     fn slowmode() {

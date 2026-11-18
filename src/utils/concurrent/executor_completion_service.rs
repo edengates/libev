@@ -38,8 +38,16 @@ pub struct ExecutorCompletionService {
 impl ExecutorCompletionService {
     /// Starts the thread of this manager on the `executor`.
     ///
-    /// The `capacity` is the maximum number of events handled per poll. The `factory` will be used to handle IO.
-    pub fn new(executor: &ThreadPerTaskExecutor, capacity: usize, factory: fn(u32) -> io::Result<CompletionService>) -> io::Result<Self> {
+    /// The `capacity` is the maximum number of events handled per poll.
+    pub fn new(executor: &ThreadPerTaskExecutor, capacity: usize) -> io::Result<Self> {
+        Self::with_factory(executor, capacity, CompletionService::new_factory())
+    }
+
+    pub(crate) fn with_factory(
+        executor: &ThreadPerTaskExecutor,
+        capacity: usize,
+        factory: fn(u32) -> io::Result<CompletionService>,
+    ) -> io::Result<Self> {
         let port = Arc::new(factory(capacity as u32)?);
         let (sender, receiver) = mpsc::channel::<Task>();
         let (signal, shutdown_handle) = mpsc::channel::<()>();
@@ -50,7 +58,7 @@ impl ExecutorCompletionService {
                 let mut manager = ScheduledExecutorService::new(port, capacity);
                 while !manager.is_shutdown() {
                     if let Err(error) = manager.run_worker() {
-                        error!(error:% = error; "Encountered error in gateway worker");
+                        error!(error:% = error; "Encountered error in socket worker");
                         break;
                     }
                     // Now run all tasks before trying to run IO again.
@@ -160,19 +168,16 @@ impl Drop for ExecutorCompletionService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::handle::DefaultHandler;
     use crate::utils::concurrent::CountingThreadFactory;
     use crate::handle::event::Event;
     #[cfg(windows)]
     use crate::handle::socket;
-    #[cfg(target_os = "linux")]
-    use libc::EPOLLIN;
-    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
-    use libc::EVFILT_READ;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     #[cfg(unix)]
-    use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
+    use std::os::fd::{AsFd, BorrowedFd};
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
+    use std::os::fd::AsRawFd;
     #[cfg(windows)]
     use std::os::windows::io::{AsSocket, BorrowedSocket};
     use std::pin::Pin;
@@ -183,7 +188,7 @@ mod tests {
     #[test]
     fn execute() {
         let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::new(|| "Test", "Loop"));
-        let executor = ExecutorCompletionService::new(&manager, 64, DefaultHandler::new_factory()).unwrap();
+        let executor = executor(&manager);
         let (sender, receiver) = mpsc::channel();
 
         for index in 1..=3 {
@@ -208,7 +213,7 @@ mod tests {
     #[test]
     fn shutdown() {
         let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::new(|| "Test", "Loop"));
-        let executor = ExecutorCompletionService::new(&manager, 64, DefaultHandler::new_factory()).unwrap();
+        let executor = executor(&manager);
         let (sender, receiver) = mpsc::channel();
 
         for index in 1..=3 {
@@ -224,7 +229,7 @@ mod tests {
     #[test]
     fn schedule() {
         let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::new(|| "Test", "Loop"));
-        let executor = ExecutorCompletionService::new(&manager, 64, DefaultHandler::new_factory()).unwrap();
+        let executor = executor(&manager);
         let (sender, receiver) = mpsc::channel();
         let start = Instant::now();
 
@@ -262,7 +267,7 @@ mod tests {
     #[test]
     fn enqueue() {
         let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::new(|| "Test", "Loop"));
-        let executor = ExecutorCompletionService::new(&manager, 64, DefaultHandler::new_factory()).unwrap();
+        let executor = executor(&manager);
         let (sender, receiver) = mpsc::channel();
         executor
             .enqueue(async {
@@ -282,7 +287,7 @@ mod tests {
     #[test]
     fn delay() {
         let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::new(|| "Test", "Loop"));
-        let executor = ExecutorCompletionService::new(&manager, 64, DefaultHandler::new_factory()).unwrap();
+        let executor = executor(&manager);
         let (sender, receiver) = mpsc::channel();
         let start = Instant::now();
         let delay = executor.delay(Duration::from_millis(50)).unwrap();
@@ -299,7 +304,7 @@ mod tests {
     #[test]
     fn io_uring() {
         let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::new(|| "Test", "Loop"));
-        let executor = ExecutorCompletionService::new(&manager, 64, crate::handle::IoUringHandler::new_factory()).unwrap();
+        let executor = ExecutorCompletionService::new(&manager, 64).unwrap();
         assert!(executor.port().is_io_uring());
         let (sender, receiver) = mpsc::channel();
         let start = Instant::now();
@@ -513,18 +518,26 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    fn receive<S: AsRawFd>(manager: &mut ScheduledExecutorService, socket: &S) -> io::Result<bool> {
-        manager.submit(socket, EPOLLIN as u32).map(|_| true)
+    fn receive<S: AsFd>(manager: &mut ScheduledExecutorService, socket: &S) -> io::Result<bool> {
+        manager.submit(socket, crate::handle::READABLE).map(|_| true)
     }
 
     #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     fn receive<S: AsRawFd>(manager: &mut ScheduledExecutorService, socket: &S) -> io::Result<bool> {
-        manager.submit(socket, EVFILT_READ, true).map(|_| true)
+        manager.submit(socket, rustix::event::kqueue::EventFilter::Read, true).map(|_| true)
     }
 
     #[cfg(windows)]
     fn receive(manager: &mut ScheduledExecutorService, stream: &TcpStream) -> io::Result<bool> {
         manager.read(stream, Event::new(16)).map(|_| true)
+    }
+
+    fn executor(manager: &ThreadPerTaskExecutor) -> ExecutorCompletionService {
+        #[cfg(target_os = "linux")]
+        let factory = crate::handle::epoll::CompletionService::new_factory();
+        #[cfg(not(target_os = "linux"))]
+        let factory = CompletionService::new_factory();
+        ExecutorCompletionService::with_factory(manager, 64, factory).unwrap()
     }
 
     fn listener() -> TcpListener {
@@ -534,7 +547,7 @@ mod tests {
     #[test]
     fn echo() {
         let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::new(|| "Test", "Loop"));
-        let executor = ExecutorCompletionService::new(&manager, 64, DefaultHandler::new_factory()).unwrap();
+        let executor = executor(&manager);
         let listener = listener();
         let address = listener.local_addr().unwrap();
         executor.register(move || Box::new(ServerSocketChannelAdapter { listener })).recv().unwrap().unwrap();
@@ -553,7 +566,7 @@ mod tests {
     #[test]
     fn register() {
         let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::new(|| "Test", "Loop"));
-        let executor = ExecutorCompletionService::new(&manager, 64, DefaultHandler::new_factory()).unwrap();
+        let executor = executor(&manager);
         let data = executor.register(move || Box::new(ErrorChannel { listener: listener() }));
         assert!(data.recv().unwrap().is_err());
     }
@@ -561,7 +574,7 @@ mod tests {
     #[test]
     fn retry() {
         let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::new(|| "Test", "Loop"));
-        let executor = ExecutorCompletionService::new(&manager, 64, DefaultHandler::new_factory()).unwrap();
+        let executor = executor(&manager);
         let (sender, receiver) = mpsc::channel();
         let channel = ReconnectChannel { listener: listener(), sender, count: 0 };
         executor.register(move || Box::new(channel)).recv().unwrap().unwrap();
@@ -574,7 +587,7 @@ mod tests {
     #[test]
     fn panic() {
         let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::new(|| "Test", "Loop"));
-        let executor = ExecutorCompletionService::new(&manager, 64, DefaultHandler::new_factory()).unwrap();
+        let executor = executor(&manager);
         let listener = listener();
         let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (stream, _) = listener.accept().unwrap();
@@ -593,7 +606,7 @@ mod tests {
     #[test]
     fn shutdown_timeout() {
         let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::new(|| "Test", "Loop"));
-        let executor = ExecutorCompletionService::new(&manager, 64, DefaultHandler::new_factory()).unwrap();
+        let executor = executor(&manager);
         executor.register(move || Box::new(LockedChannel { listener: listener() })).recv().unwrap().unwrap();
 
         executor.shutdown(Duration::from_millis(100));
@@ -604,7 +617,7 @@ mod tests {
     #[test]
     fn close() {
         let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::new(|| "Test", "Loop"));
-        let executor = ExecutorCompletionService::new(&manager, 64, DefaultHandler::new_factory()).unwrap();
+        let executor = executor(&manager);
         let listener = listener();
         let address = listener.local_addr().unwrap();
         executor.register(move || Box::new(ServerSocketChannelAdapter { listener })).recv().unwrap().unwrap();

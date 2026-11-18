@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
-#![cfg(target_os = "linux")]
-
-fn socket_queue_factory() -> fn(u32) -> std::io::Result<libev::handle::CompletionService> {
-    libev::handle::IoUringHandler::new_factory()
-}
-
-include!("common/socket_manager.rs");
+pub(crate) mod event;
+mod completion_service;
+pub use completion_service::{BufferRing, CompletionService};
+mod scheduled_executor_service;
+pub(crate) use scheduled_executor_service::{close, run_worker};
+mod socket_channel;
+pub use socket_channel::SocketChannel;
+mod server_socket_channel;
+pub use server_socket_channel::ServerSocketChannel;

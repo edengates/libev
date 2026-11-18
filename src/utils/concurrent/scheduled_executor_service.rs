@@ -195,7 +195,14 @@ impl ScheduledExecutorService {
         self.schedule(delay, move |manager| manager.queue.cancel(key));
     }
 
-    pub(crate) fn close_resource(&mut self, key: usize, mut handle: Box<dyn Channel>) {
+    pub(crate) fn close_sockets(&mut self) {
+        let sockets: Vec<(usize, Box<dyn Channel>)> = self.sockets.drain().collect();
+        for (key, handle) in sockets {
+            self.close_resource(key, handle);
+        }
+    }
+
+    fn close_resource(&mut self, key: usize, mut handle: Box<dyn Channel>) {
         let socket_id = mem::replace(&mut self.socket_id, key);
         panic::catch_unwind(AssertUnwindSafe(|| {
             handle.close(self);
@@ -249,7 +256,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     fn manager() -> ScheduledExecutorService {
-        ScheduledExecutorService::new(Arc::new(crate::handle::DefaultHandler::new_factory()(64).unwrap()), 64)
+        ScheduledExecutorService::new(Arc::new(crate::handle::CompletionService::new_factory()(64).unwrap()), 64)
     }
 
     #[cfg(any(windows, target_os = "macos", target_os = "freebsd"))]

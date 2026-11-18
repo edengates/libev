@@ -22,8 +22,8 @@ pub(crate) use std::os::windows::io::BorrowedSocket;
 use std::os::windows::io::AsSocket;
 use std::sync::mpsc::Receiver;
 
-pub mod socket;
-pub mod event;
+pub(crate) mod socket;
+pub(crate) mod event;
 mod completion_service;
 pub use completion_service::CompletionService;
 mod scheduled_executor_service;
@@ -32,19 +32,15 @@ mod socket_channel;
 pub use socket_channel::SocketChannel;
 mod server_socket_channel;
 pub use server_socket_channel::ServerSocketChannel;
-mod iocp_handler;
-
-pub mod transport {
-    pub use super::iocp_handler::IocpHandler;
-
-    pub type DefaultHandler = IocpHandler;
-}
-
 pub(crate) fn as_socket(stream: &TcpStream) -> BorrowedSocket<'_> {
     stream.as_socket()
 }
 
-pub(crate) fn bind(pool: &ExecutorCompletionService, listener: TcpListener, socket_manager: SocketManager) -> Receiver<io::Result<()>> {
+pub(crate) fn bind(
+    pool: &ExecutorCompletionService,
+    listener: TcpListener,
+    socket_manager: SocketManager,
+) -> Receiver<io::Result<()>> {
     pool.register(move || Box::new(ServerSocketChannel::new(listener, socket_manager)))
 }
 

@@ -15,29 +15,17 @@
  */
 
 use crate::SocketManager;
-use crate::entities::channel::mixin::middleman::MessageChannelMixin;
 use crate::handle::Channel;
 use crate::handle::socket;
 use crate::handle::event::Event;
-use crate::handle::SocketChannelMixin;
+use crate::handle::{SocketChannelMixin, SocketChannelState};
 use crate::utils::concurrent::ScheduledExecutorService;
 use bytes::BytesMut;
 use std::io;
-use std::net::{Shutdown, SocketAddr, TcpStream};
-use std::rc::Rc;
+use std::net::{SocketAddr, TcpStream};
 
 pub struct SocketChannel {
-    socket: TcpStream,
-    channel: Rc<MessageChannelMixin>,
-    socket_address: Option<SocketAddr>,
-    sending: Option<usize>,
-    receiving: bool,
-}
-
-impl Drop for SocketChannel {
-    fn drop(&mut self) {
-        self.socket.shutdown(Shutdown::Write).ok();
-    }
+    state: SocketChannelState,
 }
 
 impl SocketChannel {
@@ -46,11 +34,7 @@ impl SocketChannel {
         socket_manager: SocketManager,
     ) -> Self {
         Self {
-            socket,
-            channel: Rc::new(MessageChannelMixin::new(socket_manager)),
-            socket_address: None,
-            sending: None,
-            receiving: false,
+            state: SocketChannelState::new(socket, None, socket_manager),
         }
     }
 
@@ -59,35 +43,35 @@ impl SocketChannel {
         address: SocketAddr,
         socket_manager: SocketManager,
     ) -> Self {
-        let mut channel = Self::new(socket, socket_manager);
-        channel.socket_address = Some(address);
-        channel
+        Self {
+            state: SocketChannelState::new(socket, Some(address), socket_manager),
+        }
     }
 
     fn read(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
-        self.receiving = false;
-        let buffer_size = self.channel.socket_manager().buffer_size();
-        for _ in 0..self.channel.socket_manager().chunk_limit() {
+        self.state.receiving = false;
+        let buffer_size = self.state.channel.socket_manager().buffer_size();
+        for _ in 0..self.state.channel.socket_manager().chunk_limit() {
             let data = {
                 let buffer = &mut manager.read_buffer;
                 buffer.reserve(buffer_size);
-                socket::receive(&self.socket, buffer).map(|length| (length, buffer.split()))
+                socket::receive(&self.state.socket, buffer).map(|length| (length, buffer.split()))
             };
             match data {
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                 Ok((length, message)) if length > 0 => {
-                    self.channel.read(manager, message);
+                    self.state.channel.read(manager, message);
                     self.send(manager)?;
                     if length < buffer_size
-                        || self.channel.is_connected()
-                        || !self.channel.buffer().borrow().is_open()
-                        || self.channel.buffer().borrow().is_deafened()
+                        || self.state.channel.is_connected()
+                        || !self.state.channel.buffer().borrow().is_open()
+                        || self.state.channel.buffer().borrow().is_deafened()
                     {
                         break;
                     }
                 }
                 Ok((0, _)) => {
-                    self.channel.buffer().borrow_mut().close();
+                    self.state.channel.buffer().borrow_mut().close();
                     break;
                 }
                 _ => return Ok(false),
@@ -98,33 +82,21 @@ impl SocketChannel {
 }
 
 impl SocketChannelMixin for SocketChannel {
-    fn stream(&self) -> &TcpStream {
-        &self.socket
+    fn state(&self) -> &SocketChannelState {
+        &self.state
     }
 
-    fn channel(&self) -> &Rc<MessageChannelMixin> {
-        &self.channel
+    fn state_mut(&mut self) -> &mut SocketChannelState {
+        &mut self.state
     }
 
-    fn socket_address(&mut self) -> &mut Option<SocketAddr> {
-        &mut self.socket_address
-    }
-
-    fn sending(&mut self) -> &mut Option<usize> {
-        &mut self.sending
-    }
-
-    fn receiving(&mut self) -> &mut bool {
-        &mut self.receiving
-    }
-
-    fn complete(&mut self, manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool> {
+    fn handle_event(&mut self, manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool> {
         let Ok(content) = data else {
             return Ok(false);
         };
         match content.opcode() {
             Event::CONNECT => {
-                socket::connected(&self.socket)?;
+                socket::connected(&self.state.socket)?;
                 self.on_connected(manager)
             }
             Event::READ => self.read(manager),
@@ -134,10 +106,10 @@ impl SocketChannelMixin for SocketChannel {
     }
 
     fn do_begin_read(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<()> {
-        manager.read(&self.socket, Event::new(0))
+        manager.read(&self.state.socket, Event::new(0))
     }
 
     fn do_write(&mut self, manager: &mut ScheduledExecutorService, messages: Vec<BytesMut>) -> io::Result<()> {
-        manager.write(&self.socket, Event::wrap(messages))
+        manager.write(&self.state.socket, Event::wrap(messages))
     }
 }

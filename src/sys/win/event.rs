@@ -35,12 +35,12 @@ pub struct Event {
 }
 
 impl Event {
-    pub const READ: u32 = 1 << 0;
-    pub const WRITE: u32 = 1 << 2;
-    pub const CONNECT: u32 = 1 << 3;
-    pub const ACCEPT: u32 = 1 << 4;
+    pub(crate) const READ: u32 = 1 << 0;
+    pub(crate) const WRITE: u32 = 1 << 2;
+    pub(crate) const CONNECT: u32 = 1 << 3;
+    pub(crate) const ACCEPT: u32 = 1 << 4;
 
-    pub fn new(capacity: usize) -> Box<Self> {
+    pub(crate) fn new(capacity: usize) -> Box<Self> {
         if capacity == 0 {
             Self::wrap(Vec::new())
         } else {
@@ -48,7 +48,7 @@ impl Event {
         }
     }
 
-    pub fn wrap(buffers: Vec<BytesMut>) -> Box<Self> {
+    pub(crate) fn wrap(buffers: Vec<BytesMut>) -> Box<Self> {
         Box::new(Self {
             overlapped: unsafe { mem::zeroed() },
             buffers,
@@ -59,15 +59,15 @@ impl Event {
     }
 
     #[cfg(test)]
-    pub fn buffer(&self) -> &BytesMut {
+    pub(crate) fn buffer(&self) -> &BytesMut {
         &self.buffers[0]
     }
 
-    pub fn length(&self) -> usize {
+    pub(crate) fn length(&self) -> usize {
         self.length
     }
 
-    pub fn opcode(&self) -> u32 {
+    pub(crate) fn opcode(&self) -> u32 {
         self.opcode
     }
 
@@ -80,11 +80,11 @@ impl Event {
     }
 
     #[cfg(test)]
-    pub fn into_body(self) -> BytesMut {
+    pub(crate) fn into_body(self) -> BytesMut {
         self.buffers.into_iter().next().unwrap_or_default()
     }
 
-    pub(crate) fn reallocate(&mut self) -> bool {
+    pub(crate) fn advance(&mut self) -> bool {
         let mut length = mem::take(&mut self.length);
         for buffer in &mut self.buffers {
             let step = length.min(buffer.len());
@@ -148,22 +148,14 @@ impl Event {
     ///
     /// `entry` must come from [`CompletionService::poll`](crate::handle::CompletionService::poll), hold a packet
     /// submitted by this module, and be handled only once.
-    pub(crate) unsafe fn handle_success(entry: &OVERLAPPED_ENTRY) -> io::Result<Box<Self>> {
-        let data = unsafe { Box::from_raw(entry.lpOverlapped as *mut Self) };
-        let status = data.overlapped.Internal as NTSTATUS;
+    pub(crate) unsafe fn from_entry(entry: &OVERLAPPED_ENTRY) -> io::Result<Box<Self>> {
+        let mut packet = unsafe { Box::from_raw(entry.lpOverlapped as *mut Self) };
+        let status = packet.overlapped.Internal as NTSTATUS;
         if status != 0 {
-            Err(io::Error::from_raw_os_error(
+            return Err(io::Error::from_raw_os_error(
                 unsafe { RtlNtStatusToDosError(status) } as i32,
-            ))
-        } else {
-            Self::on_success(data, entry)
+            ));
         }
-    }
-
-    fn on_success(
-        mut packet: Box<Event>,
-        entry: &OVERLAPPED_ENTRY,
-    ) -> io::Result<Box<Self>> {
         packet.length = entry.dwNumberOfBytesTransferred as usize;
         if packet.opcode == Event::READ {
             let length = packet.length();
@@ -180,13 +172,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reallocate() {
+    fn advance() {
         let mut packet =
             Event::wrap(vec![BytesMut::from(&b"pi"[..]), BytesMut::from(&b"ng"[..])]);
         packet.length = 3;
-        assert!(packet.reallocate());
+        assert!(packet.advance());
         assert_eq!(&packet.buffer()[..], b"g");
         packet.length = 1;
-        assert!(!packet.reallocate());
+        assert!(!packet.advance());
     }
 }

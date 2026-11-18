@@ -234,14 +234,7 @@ mod tests {
     #[test]
     fn send() {
         let socket_manager = DefaultSocketManagerBuilder::new()
-            .set_socket_pool(
-                ScheduledThreadPoolExecutor::new(
-                    1,
-                    64,
-                    crate::handle::DefaultHandler::new_factory(),
-                )
-                .unwrap(),
-            )
+            .set_socket_pool(ScheduledThreadPoolExecutor::new(1, 64).unwrap())
             .add_event_listener_provider(|| GenericEventAdapter)
             .build()
             .unwrap();

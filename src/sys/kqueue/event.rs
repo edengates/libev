@@ -14,15 +14,23 @@
  * limitations under the License.
  */
 
-use crate::handle::CompletionService;
-use std::io;
+use rustix::event::kqueue::{EventFilter, EventFlags};
 
-/// IO handler which uses IO completion ports (IOCP) under the covers. Only works on Windows!
-pub struct IocpHandler;
+pub struct Event {
+    filter: EventFilter,
+    flags: EventFlags,
+}
 
-impl IocpHandler {
-    /// Returns a new factory that creates IOCP instances.
-    pub fn new_factory() -> fn(u32) -> io::Result<CompletionService> {
-        |_| CompletionService::new()
+impl Event {
+    pub(crate) fn new(filter: EventFilter, flags: EventFlags) -> Self {
+        Self { filter, flags }
+    }
+
+    pub(crate) fn is_readable(&self) -> bool {
+        matches!(self.filter, EventFilter::Read(_)) || self.flags.contains(EventFlags::EOF)
+    }
+
+    pub(crate) fn is_writable(&self) -> bool {
+        matches!(self.filter, EventFilter::Write(_))
     }
 }

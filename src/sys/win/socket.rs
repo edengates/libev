@@ -38,18 +38,7 @@ pub(crate) fn listener(
     if is_address_shared {
         listener.set_reuse_address(true)?;
     } else {
-        let data = unsafe {
-            setsockopt(
-                listener.as_raw_socket() as SOCKET,
-                SOL_SOCKET,
-                SO_EXCLUSIVEADDRUSE,
-                (&1i32 as *const i32).cast(),
-                size_of::<i32>() as i32,
-            )
-        };
-        if data == SOCKET_ERROR {
-            return Err(last_error());
-        }
+        set_option(&listener, SO_EXCLUSIVEADDRUSE, Some(&1i32))?;
     }
     if address.is_ipv6() {
         listener.set_only_v6(!is_fallback_enabled)?;
@@ -63,35 +52,22 @@ pub(crate) fn client(address: &SocketAddr) -> io::Result<TcpStream> {
     Ok(TcpStream::from(socket(address.is_ipv4())?))
 }
 
-pub fn accepted(listener: &TcpListener, mut packet: Event) -> io::Result<TcpStream> {
+pub(crate) fn accepted(listener: &TcpListener, mut packet: Event) -> io::Result<TcpStream> {
     let socket = packet.take_socket().ok_or(io::ErrorKind::InvalidInput)?;
-    let parent = listener.as_raw_socket() as SOCKET;
-    let data = unsafe {
-        setsockopt(
-            socket.as_raw_socket() as SOCKET,
-            SOL_SOCKET,
-            SO_UPDATE_ACCEPT_CONTEXT,
-            (&parent as *const SOCKET).cast(),
-            size_of::<SOCKET>() as i32,
-        )
-    };
-    if data == SOCKET_ERROR {
-        Err(last_error())
-    } else {
-        Ok(TcpStream::from(socket))
-    }
+    set_option(&socket, SO_UPDATE_ACCEPT_CONTEXT, Some(&(listener.as_raw_socket() as SOCKET)))?;
+    Ok(TcpStream::from(socket))
 }
 
-pub fn connected(stream: &TcpStream) -> io::Result<()> {
-    let data = unsafe {
-        setsockopt(
-            stream.as_raw_socket() as SOCKET,
-            SOL_SOCKET,
-            SO_UPDATE_CONNECT_CONTEXT,
-            ptr::null(),
-            0,
-        )
+pub(crate) fn connected(stream: &TcpStream) -> io::Result<()> {
+    set_option::<()>(stream, SO_UPDATE_CONNECT_CONTEXT, None)
+}
+
+fn set_option<T>(socket: &impl AsRawSocket, name: i32, value: Option<&T>) -> io::Result<()> {
+    let (value, length) = match value {
+        Some(value) => ((value as *const T).cast(), size_of::<T>() as i32),
+        None => (ptr::null(), 0),
     };
+    let data = unsafe { setsockopt(socket.as_raw_socket() as SOCKET, SOL_SOCKET, name, value, length) };
     if data == SOCKET_ERROR {
         Err(last_error())
     } else {
@@ -99,11 +75,11 @@ pub fn connected(stream: &TcpStream) -> io::Result<()> {
     }
 }
 
-pub(super) fn socket(ipv4: bool) -> io::Result<Socket> {
+pub(crate) fn socket(ipv4: bool) -> io::Result<Socket> {
     Socket::new(if ipv4 { Domain::IPV4 } else { Domain::IPV6 }, Type::STREAM, None)
 }
 
-pub(super) fn socket_address(address: &SocketAddr) -> BytesMut {
+pub(crate) fn socket_address(address: &SocketAddr) -> BytesMut {
     let address = SockAddr::from(*address);
     BytesMut::from(unsafe { slice::from_raw_parts(address.as_ptr().cast::<u8>(), address.len() as usize) })
 }
@@ -124,7 +100,7 @@ pub(crate) fn init(stream: &TcpStream, tcp_no_delay: bool, close_timeout: Option
     stream.set_nonblocking(true)
 }
 
-pub(super) fn last_error() -> io::Error {
+pub(crate) fn last_error() -> io::Error {
     io::Error::from_raw_os_error(unsafe { WSAGetLastError() })
 }
 

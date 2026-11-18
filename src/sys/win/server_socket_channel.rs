@@ -34,7 +34,7 @@ pub struct ServerSocketChannel {
 }
 
 impl ServerSocketChannel {
-    pub fn new(listener: TcpListener, socket_manager: SocketManager) -> Self {
+    pub(crate) fn new(listener: TcpListener, socket_manager: SocketManager) -> Self {
         let reconnect_delay = socket_manager.reconnect_delay();
         Self {
             listener,

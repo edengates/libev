@@ -311,7 +311,7 @@ impl ListenerAdapter for MessageBulkAdapter {
 }
 
 fn shard_manager(shards_total: usize) -> ScheduledThreadPoolExecutor {
-    ScheduledThreadPoolExecutor::new(shards_total, 64, socket_queue_factory()).unwrap()
+    ScheduledThreadPoolExecutor::new(shards_total, 64).unwrap()
 }
 
 #[test]

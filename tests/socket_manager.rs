@@ -14,8 +14,4 @@
  * limitations under the License.
  */
 
-fn socket_queue_factory() -> fn(u32) -> std::io::Result<libev::handle::CompletionService> {
-    libev::handle::DefaultHandler::new_factory()
-}
-
 include!("common/socket_manager.rs");

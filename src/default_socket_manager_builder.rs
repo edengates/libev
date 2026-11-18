@@ -15,7 +15,6 @@
  */
 
 use crate::SocketManager;
-use crate::handle::DefaultHandler;
 use crate::hooks::ListenerAdapter;
 use crate::utils::concurrent::ScheduledThreadPoolExecutor;
 use crate::utils::{InterfacedEventManager, EventManager, EventQueue, EventManagerProvider, EventManagerProxy};
@@ -356,7 +355,7 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
         });
         let socket_pool = match self.socket_pool {
             Some(socket_pool) => socket_pool,
-            None => ScheduledThreadPoolExecutor::new(0, 64, DefaultHandler::new_factory())?,
+            None => ScheduledThreadPoolExecutor::new(0, 64)?,
         };
         let worker_pool = self.worker_pool.unwrap_or_else(|| socket_pool.clone());
         let threading_config = ThreadingConfig::new(

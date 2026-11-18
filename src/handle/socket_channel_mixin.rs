@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::SocketManager;
 use crate::entities::channel::mixin::middleman::MessageChannelMixin;
 use crate::handle::Channel;
 use crate::handle::event::Event;
@@ -22,22 +23,42 @@ use crate::utils::concurrent::ScheduledExecutorService;
 use bytes::BytesMut;
 use log::debug;
 use std::io;
-use std::net::{SocketAddr, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::rc::Rc;
+
+pub(crate) struct SocketChannelState {
+    pub(crate) socket: TcpStream,
+    pub(crate) channel: Rc<MessageChannelMixin>,
+    pub(crate) socket_address: Option<SocketAddr>,
+    pub(crate) sending: Option<usize>,
+    pub(crate) receiving: bool,
+}
+
+impl SocketChannelState {
+    pub(crate) fn new(socket: TcpStream, socket_address: Option<SocketAddr>, socket_manager: SocketManager) -> Self {
+        Self {
+            socket,
+            channel: Rc::new(MessageChannelMixin::new(socket_manager)),
+            socket_address,
+            sending: None,
+            receiving: false,
+        }
+    }
+}
+
+impl Drop for SocketChannelState {
+    fn drop(&mut self) {
+        self.socket.shutdown(Shutdown::Write).ok();
+    }
+}
 
 /// The [`Channel`] shared by the platform socket channels.
 pub(crate) trait SocketChannelMixin: Sized {
-    fn stream(&self) -> &TcpStream;
+    fn state(&self) -> &SocketChannelState;
 
-    fn channel(&self) -> &Rc<MessageChannelMixin>;
+    fn state_mut(&mut self) -> &mut SocketChannelState;
 
-    fn socket_address(&mut self) -> &mut Option<SocketAddr>;
-
-    fn sending(&mut self) -> &mut Option<usize>;
-
-    fn receiving(&mut self) -> &mut bool;
-
-    fn complete(&mut self, manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool>;
+    fn handle_event(&mut self, manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool>;
 
     fn do_register(&self) -> io::Result<()> {
         Ok(())
@@ -50,18 +71,20 @@ pub(crate) trait SocketChannelMixin: Sized {
     fn do_close(&mut self, _manager: &mut ScheduledExecutorService) {}
 
     fn ready(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
-        let socket_manager = self.channel().socket_manager();
-        socket::init(self.stream(), socket_manager.tcp_no_delay(), socket_manager.close_timeout())?;
-        self.channel().ready(manager);
+        let state = self.state();
+        let socket_manager = state.channel.socket_manager();
+        socket::init(&state.socket, socket_manager.tcp_no_delay(), socket_manager.close_timeout())?;
+        state.channel.ready(manager);
         Channel::execute(self, manager)
     }
 
     fn send(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<()> {
-        if self.sending().is_none() {
-            let limit = self.channel().socket_manager().packet_limit();
-            let messages = self.channel().buffer().borrow_mut().read(limit);
+        let state = self.state_mut();
+        if state.sending.is_none() {
+            let limit = state.channel.socket_manager().packet_limit();
+            let messages = state.channel.buffer().borrow_mut().read(limit);
             if !messages.is_empty() {
-                *self.sending() = Some(messages.iter().map(BytesMut::len).sum());
+                state.sending = Some(messages.iter().map(BytesMut::len).sum());
                 self.do_write(manager, messages)?;
             }
         }
@@ -69,13 +92,14 @@ pub(crate) trait SocketChannelMixin: Sized {
     }
 
     fn on_connected(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
-        *self.socket_address() = None;
+        self.state_mut().socket_address = None;
         self.ready(manager)
     }
 
     fn handle_response(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
-        if let Some(size) = self.sending().take() {
-            self.channel().handle_response(size);
+        let state = self.state_mut();
+        if let Some(size) = state.sending.take() {
+            state.channel.handle_response(size);
         }
         Channel::execute(self, manager)
     }
@@ -83,15 +107,16 @@ pub(crate) trait SocketChannelMixin: Sized {
 
 impl<T: SocketChannelMixin> Channel for T {
     fn socket(&self) -> BorrowedSocket<'_> {
-        as_socket(self.stream())
+        as_socket(&self.state().socket)
     }
 
     fn on_registered(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
         self.do_register()?;
-        match *self.socket_address() {
+        let state = self.state();
+        match state.socket_address {
             Some(address) => {
-                manager.connect(self.stream(), &address)?;
-                manager.setup_keep_alive(self.channel().socket_manager().connect_timeout());
+                manager.connect(&state.socket, &address)?;
+                manager.setup_keep_alive(state.channel.socket_manager().connect_timeout());
                 Ok(true)
             }
             None => self.ready(manager),
@@ -99,40 +124,40 @@ impl<T: SocketChannelMixin> Channel for T {
     }
 
     fn handle(&mut self, manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool> {
-        self.complete(manager, data)
+        self.handle_event(manager, data)
     }
 
     fn execute(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
-        let channel = Rc::clone(self.channel());
+        let channel = Rc::clone(&self.state().channel);
         channel.execute(manager);
         self.send(manager)?;
-        if !*self.receiving()
-            && !channel.is_connected()
-            && channel.buffer().borrow().is_open()
-            && !channel.buffer().borrow().is_deafened()
-        {
+        let (is_open, is_deafened) = {
+            let buffer = channel.buffer().borrow();
+            (buffer.is_open(), buffer.is_deafened())
+        };
+        if !self.state().receiving && !channel.is_connected() && is_open && !is_deafened {
             self.do_begin_read(manager)?;
-            *self.receiving() = true;
+            self.state_mut().receiving = true;
         }
-        Ok(channel.buffer().borrow().is_open() || self.sending().is_some())
+        Ok(is_open || self.state().sending.is_some())
     }
 
     fn shutdown(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
-        self.channel().buffer().borrow_mut().close();
+        self.state().channel.buffer().borrow_mut().close();
         self.execute(manager)
     }
 
     fn check_expired(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
-        if self.socket_address().is_some() {
+        if self.state().socket_address.is_some() {
             debug!("Socket timed out");
             return Ok(false);
         }
-        self.channel().check_expired(manager);
+        self.state().channel.check_expired(manager);
         self.execute(manager)
     }
 
     fn close(&mut self, manager: &mut ScheduledExecutorService) {
-        self.channel().close(manager);
+        self.state().channel.close(manager);
         self.do_close(manager);
     }
 }

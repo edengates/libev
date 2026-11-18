@@ -15,18 +15,15 @@
  */
 
 //! The IO handlers of each platform.
-#[cfg_attr(target_os = "linux", path = "../unix/linux.rs")]
-#[cfg_attr(target_os = "macos", path = "../unix/darwin.rs")]
-#[cfg_attr(target_os = "freebsd", path = "../unix/freebsd.rs")]
-#[cfg_attr(windows, path = "../win/mod.rs")]
+#[cfg_attr(any(target_os = "linux", target_os = "macos", target_os = "freebsd"), path = "../sys/native.rs")]
+#[cfg_attr(windows, path = "../sys/win/mod.rs")]
 mod platform;
 pub(crate) use platform::*;
-pub use platform::transport::*;
 pub use platform::CompletionService;
 
 #[cfg(any(windows, target_os = "linux"))]
 mod socket_channel_mixin;
 #[cfg(any(windows, target_os = "linux"))]
-pub(crate) use socket_channel_mixin::SocketChannelMixin;
+pub(crate) use socket_channel_mixin::{SocketChannelMixin, SocketChannelState};
 mod channel;
 pub(crate) use channel::Channel;

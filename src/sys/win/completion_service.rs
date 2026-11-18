@@ -15,30 +15,35 @@
  */
 
 use std::io;
-use std::os::windows::io::AsRawSocket;
+use std::os::windows::io::{AsRawHandle, AsRawSocket, FromRawHandle, OwnedHandle};
 use std::ptr;
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_TIMEOUT};
+use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, WAIT_TIMEOUT};
 use windows_sys::Win32::System::IO::{
     CreateIoCompletionPort, GetQueuedCompletionStatusEx, OVERLAPPED_ENTRY,
     PostQueuedCompletionStatus,
 };
 
 pub struct CompletionService {
-    handle: HANDLE,
+    handle: OwnedHandle,
 }
 
 impl CompletionService {
+    /// Returns a new factory that creates IOCP instances.
+    pub(crate) fn new_factory() -> fn(u32) -> io::Result<Self> {
+        |_| Self::new()
+    }
+
     pub(crate) fn new() -> io::Result<Self> {
         let handle = unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, ptr::null_mut(), 0, 1) };
         if handle.is_null() {
             Err(io::Error::last_os_error())
         } else {
-            Ok(Self { handle })
+            Ok(Self { handle: unsafe { OwnedHandle::from_raw_handle(handle) } })
         }
     }
 
     pub(crate) fn wakeup(&self, id: usize) -> io::Result<()> {
-        let status = unsafe { PostQueuedCompletionStatus(self.handle, 0, id, ptr::null_mut()) };
+        let status = unsafe { PostQueuedCompletionStatus(self.handle.as_raw_handle(), 0, id, ptr::null_mut()) };
         if status == 0 {
             Err(io::Error::last_os_error())
         } else {
@@ -50,7 +55,7 @@ impl CompletionService {
         let mut count = 0;
         let data: i32 = unsafe {
             GetQueuedCompletionStatusEx(
-                self.handle,
+                self.handle.as_raw_handle(),
                 entries.as_mut_ptr(),
                 entries.len() as u32,
                 &mut count,
@@ -58,14 +63,9 @@ impl CompletionService {
                 0,
             )
         };
-        if data == 0 {
-            self.handle_error()
-        } else {
-            Ok(count as usize)
+        if data != 0 {
+            return Ok(count as usize);
         }
-    }
-
-    fn handle_error(&self) -> io::Result<usize> {
         let error = io::Error::last_os_error();
         if error.raw_os_error() == Some(WAIT_TIMEOUT as i32) {
             Ok(0)
@@ -76,24 +76,12 @@ impl CompletionService {
 
     pub(crate) fn register<S: AsRawSocket>(&self, socket: &S, id: usize) -> io::Result<()> {
         let handle = unsafe {
-            CreateIoCompletionPort(socket.as_raw_socket() as HANDLE, self.handle, id, 0)
+            CreateIoCompletionPort(socket.as_raw_socket() as HANDLE, self.handle.as_raw_handle(), id, 0)
         };
         if handle.is_null() {
             Err(io::Error::last_os_error())
         } else {
             Ok(())
-        }
-    }
-}
-
-unsafe impl Send for CompletionService {}
-
-unsafe impl Sync for CompletionService {}
-
-impl Drop for CompletionService {
-    fn drop(&mut self) {
-        unsafe {
-            CloseHandle(self.handle);
         }
     }
 }
@@ -110,26 +98,26 @@ mod tests {
 
     #[test]
     fn wakeup() {
-        let manager = CompletionService::new().unwrap();
+        let port = CompletionService::new().unwrap();
         let mut entries = entries();
-        manager.wakeup(7).unwrap();
-        manager.wakeup(9).unwrap();
-        assert_eq!(manager.poll(&mut entries, 1000).unwrap(), 2);
+        port.wakeup(7).unwrap();
+        port.wakeup(9).unwrap();
+        assert_eq!(port.poll(&mut entries, 1000).unwrap(), 2);
         assert_eq!(entries[0].lpCompletionKey, 7);
         assert_eq!(entries[1].lpCompletionKey, 9);
     }
 
     #[test]
     fn timeout() {
-        let manager = CompletionService::new().unwrap();
-        assert_eq!(manager.poll(&mut entries(), 0).unwrap(), 0);
+        let port = CompletionService::new().unwrap();
+        assert_eq!(port.poll(&mut entries(), 0).unwrap(), 0);
     }
 
     #[test]
     fn register() {
-        let manager = CompletionService::new().unwrap();
+        let port = CompletionService::new().unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        manager.register(&listener, 2).unwrap();
+        port.register(&listener, 2).unwrap();
         assert!(
             CompletionService::new()
                 .unwrap()
