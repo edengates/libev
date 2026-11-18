@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::events::GenericEvent;
+use crate::events::{Event, GenericEvent};
 
 /// Indicates that a [`MessageChannel`] is ready to be used.
 ///
@@ -23,4 +23,14 @@ use crate::events::GenericEvent;
 /// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
 pub struct ChannelReadyEvent;
 
+impl ChannelReadyEvent {
+    pub const IDENTIFIER: usize = 1 << 0;
+}
+
 impl GenericEvent for ChannelReadyEvent {}
+
+impl Event for ChannelReadyEvent {
+    fn identifier(&self) -> usize {
+        Self::IDENTIFIER
+    }
+}

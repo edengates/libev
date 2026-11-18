@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::handle::event::Event;
 use bytes::BytesMut;
 use socket2::{Domain, SockAddr, SockRef, Socket, Type};
 use std::io;
@@ -23,7 +24,8 @@ use std::ptr;
 use std::slice;
 use std::time::Duration;
 use windows_sys::Win32::Networking::WinSock::{
-    SOCKET, SOCKET_ERROR, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, SO_UPDATE_CONNECT_CONTEXT, WSAGetLastError, setsockopt,
+    SOCKET, SOCKET_ERROR, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, SO_UPDATE_ACCEPT_CONTEXT, SO_UPDATE_CONNECT_CONTEXT,
+    WSAGetLastError, setsockopt,
 };
 
 pub(crate) fn listener(
@@ -59,6 +61,25 @@ pub(crate) fn listener(
 
 pub(crate) fn client(address: &SocketAddr) -> io::Result<TcpStream> {
     Ok(TcpStream::from(socket(address.is_ipv4())?))
+}
+
+pub fn accepted(listener: &TcpListener, mut packet: Event) -> io::Result<TcpStream> {
+    let socket = packet.take_socket().ok_or(io::ErrorKind::InvalidInput)?;
+    let parent = listener.as_raw_socket() as SOCKET;
+    let data = unsafe {
+        setsockopt(
+            socket.as_raw_socket() as SOCKET,
+            SOL_SOCKET,
+            SO_UPDATE_ACCEPT_CONTEXT,
+            (&parent as *const SOCKET).cast(),
+            size_of::<SOCKET>() as i32,
+        )
+    };
+    if data == SOCKET_ERROR {
+        Err(last_error())
+    } else {
+        Ok(TcpStream::from(socket))
+    }
 }
 
 pub fn connected(stream: &TcpStream) -> io::Result<()> {

@@ -16,7 +16,7 @@
 
 #![cfg(target_os = "linux")]
 
-fn socket_queue_factory() -> libev::handle::SocketQueueFactory {
+fn socket_queue_factory() -> fn(u32) -> std::io::Result<libev::handle::CompletionService> {
     libev::handle::IoUringHandler::new_factory()
 }
 

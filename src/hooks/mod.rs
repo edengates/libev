@@ -23,9 +23,3 @@
 //! [`GenericEvent`]: crate::events::GenericEvent
 mod listener_adapter;
 pub use listener_adapter::ListenerAdapter;
-mod event_manager;
-pub(crate) use event_manager::{EventManager, EventManagerProvider, EventQueue, EventTask, cast};
-mod event_manager_proxy;
-pub(crate) use event_manager_proxy::EventManagerProxy;
-mod interfaced_event_manager;
-pub(crate) use interfaced_event_manager::InterfacedEventManager;

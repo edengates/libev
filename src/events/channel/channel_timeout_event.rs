@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::events::GenericEvent;
+use crate::events::{Event, GenericEvent};
 
 /// Indicates that the [AFK timeout] of a [`MessageChannel`] has been reached.
 ///
@@ -22,4 +22,14 @@ use crate::events::GenericEvent;
 /// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
 pub struct ChannelTimeoutEvent;
 
+impl ChannelTimeoutEvent {
+    pub const IDENTIFIER: usize = 1 << 3;
+}
+
 impl GenericEvent for ChannelTimeoutEvent {}
+
+impl Event for ChannelTimeoutEvent {
+    fn identifier(&self) -> usize {
+        Self::IDENTIFIER
+    }
+}

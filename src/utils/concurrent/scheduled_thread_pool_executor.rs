@@ -14,29 +14,86 @@
  * limitations under the License.
  */
 
-use rustc_hash::FxHashMap;
+use crate::handle::CompletionService;
+use crate::utils::concurrent::{CountingThreadFactory, ThreadPerTaskExecutor, ExecutorCompletionService};
+use futures_core::future::LocalBoxFuture;
 use log::error;
+use rustc_hash::FxHashMap;
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::panic::{self, AssertUnwindSafe};
-use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
+use std::{io, thread};
 
-pub type WorkTask = Pin<Box<dyn Future<Output = ()>>>;
+/// Acts as a manager for multiple shards.
+#[derive(Clone)]
+pub struct ScheduledThreadPoolExecutor {
+    count: Arc<AtomicUsize>,
+    shards: Arc<[ExecutorCompletionService]>,
+}
 
-pub struct QueueWorker<M> {
+impl ScheduledThreadPoolExecutor {
+    /// Creates `shards_total` shards, each one with the `factory`.
+    ///
+    /// If `shards_total` is 0, libev will select the number of shards automatically: `2 *` [`available_parallelism`].
+    /// The `capacity` is the maximum number of events handled per poll.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if one of the shards could not be created.
+    ///
+    /// [`available_parallelism`]: thread::available_parallelism
+    pub fn new(shards_total: usize, capacity: usize, factory: fn(u32) -> io::Result<CompletionService>) -> io::Result<Self> {
+        let shards_total = if shards_total == 0 { default_shard_total() } else { shards_total };
+        let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::of::<Self>("Scheduler"));
+        let mut shards = Vec::with_capacity(shards_total);
+        for _ in 0..shards_total {
+            shards.push(ExecutorCompletionService::new(&manager, capacity, factory)?);
+        }
+
+        Ok(Self {
+            count: Arc::new(AtomicUsize::new(0)),
+            shards: Arc::from(shards),
+        })
+    }
+
+    /// Returns one of the shards managed by this [`ScheduledThreadPoolExecutor`], in round-robin order.
+    pub fn provide(&self) -> &ExecutorCompletionService {
+        let count = self.count.fetch_add(1, Ordering::Relaxed);
+        let length = self.shards.len();
+        &self.shards[if length.is_power_of_two() { count & (length - 1) } else { count % length }]
+    }
+
+    /// Gets all shards bound to this [`ScheduledThreadPoolExecutor`].
+    pub fn shards(&self) -> &[ExecutorCompletionService] {
+        &self.shards
+    }
+
+    /// Returns the number of shards managed by this [`ScheduledThreadPoolExecutor`].
+    pub fn shards_total(&self) -> usize {
+        self.shards.len()
+    }
+}
+
+fn default_shard_total() -> usize {
+    thread::available_parallelism().map_or(1, |n| n.get()) * 2
+}
+
+
+pub struct DelayedWorkQueue<M> {
     scheduled_tasks: BTreeMap<(Instant, usize), Box<dyn FnOnce(&mut M) + Send>>,
     sequence: usize,
     keep_alive_handles: FxHashMap<usize, (Instant, usize)>,
-    pending_tasks: FxHashMap<usize, (WorkTask, Waker, usize)>,
+    pending_tasks: FxHashMap<usize, (LocalBoxFuture<'static, ()>, Waker, usize)>,
     task_id: usize,
     sender: Sender<usize>,
     receiver: Receiver<usize>,
 }
 
-impl<M> QueueWorker<M> {
+impl<M> DelayedWorkQueue<M> {
     pub(crate) fn new() -> Self {
         let (sender, receiver) = mpsc::channel();
         Self {
@@ -88,7 +145,7 @@ impl<M> QueueWorker<M> {
         }
     }
 
-    pub(crate) fn enqueue<W>(&mut self, mut task: WorkTask, socket_id: usize, waker: W)
+    pub(crate) fn enqueue<W>(&mut self, mut task: LocalBoxFuture<'static, ()>, socket_id: usize, waker: W)
     where
         W: FnOnce(usize, &Sender<usize>) -> Waker,
     {
@@ -140,15 +197,67 @@ impl<M> QueueWorker<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::handle::DefaultHandler;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::ptr;
     use std::task::Wake;
 
-    struct UnlockHook {
+    fn manager(shards_total: usize) -> ScheduledThreadPoolExecutor {
+        ScheduledThreadPoolExecutor::new(shards_total, 64, DefaultHandler::new_factory()).unwrap()
+    }
+
+    #[test]
+    fn provide() {
+        for (shards_total, order) in [(3, [0, 1, 2, 0]), (2, [0, 1, 0, 1])] {
+            let manager = manager(shards_total);
+            assert_eq!(manager.shards_total(), shards_total);
+            for index in order {
+                assert!(ptr::eq(manager.provide(), &manager.shards()[index]));
+            }
+        }
+    }
+
+    #[test]
+    fn count() {
+        assert_eq!(manager(0).shards_total(), default_shard_total());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shard_manager() {
+        let shard_manager = manager(2);
+        let (sender, receiver) = mpsc::channel();
+        
+        for _ in 0..2 {
+            let sender = sender.clone();
+            shard_manager
+                .provide()
+                .execute(move || {
+                    sender
+                        .send(thread::current().name().unwrap().to_string())
+                        .unwrap();
+                })
+                .unwrap();
+        }
+
+        let mut names = vec![receiver.recv().unwrap(), receiver.recv().unwrap()];
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "scheduledThreadPoolExecutor Scheduler-Worker 1",
+                "scheduledThreadPoolExecutor Scheduler-Worker 2"
+            ]
+        );
+    }
+
+    struct ThreadWaker {
         task_id: usize,
         sender: Sender<usize>,
     }
 
-    impl Wake for UnlockHook {
+    impl Wake for ThreadWaker {
         fn wake(self: Arc<Self>) {
             self.sender.send(self.task_id).ok();
         }
@@ -172,7 +281,7 @@ mod tests {
     }
 
     fn hook(task_id: usize, sender: &Sender<usize>) -> Waker {
-        Waker::from(Arc::new(UnlockHook {
+        Waker::from(Arc::new(ThreadWaker {
             task_id,
             sender: sender.clone(),
         }))
@@ -180,38 +289,38 @@ mod tests {
 
     #[test]
     fn schedule() {
-        let mut worker = QueueWorker::<Vec<u32>>::new();
-        assert_eq!(worker.timeout(), u32::MAX);
-        worker.schedule(Duration::from_millis(20), Box::new(|order| order.push(2)));
-        worker.schedule(Duration::ZERO, Box::new(|order| order.push(1)));
-        assert!(worker.timeout() <= 20);
+        let mut queue = DelayedWorkQueue::<Vec<u32>>::new();
+        assert_eq!(queue.timeout(), u32::MAX);
+        queue.schedule(Duration::from_millis(20), Box::new(|order| order.push(2)));
+        queue.schedule(Duration::ZERO, Box::new(|order| order.push(1)));
+        assert!(queue.timeout() <= 20);
 
         let mut order = Vec::new();
-        while let Some(task) = worker.next(Instant::now() + Duration::from_millis(20)) {
+        while let Some(task) = queue.next(Instant::now() + Duration::from_millis(20)) {
             task(&mut order);
         }
         assert_eq!(order, [1, 2]);
-        assert!(worker.next(Instant::now()).is_none());
+        assert!(queue.next(Instant::now()).is_none());
     }
 
     #[test]
     fn keep_alive() {
-        let mut worker = QueueWorker::<()>::new();
-        worker.setup_keep_alive(2, Duration::from_secs(60), Box::new(|_| ()));
-        worker.setup_keep_alive(2, Duration::from_secs(60), Box::new(|_| ()));
-        assert_eq!(worker.len(), 1);
-        worker.stop_keep_alive(2);
-        assert_eq!(worker.len(), 0);
+        let mut queue = DelayedWorkQueue::<()>::new();
+        queue.setup_keep_alive(2, Duration::from_secs(60), Box::new(|_| ()));
+        queue.setup_keep_alive(2, Duration::from_secs(60), Box::new(|_| ()));
+        assert_eq!(queue.len(), 1);
+        queue.stop_keep_alive(2);
+        assert_eq!(queue.len(), 0);
     }
 
     #[test]
     fn run_pending_tasks() {
-        let mut worker = QueueWorker::<()>::new();
-        worker.enqueue(Box::pin(async {}), 2, hook);
-        assert!(worker.is_empty());
+        let mut queue = DelayedWorkQueue::<()>::new();
+        queue.enqueue(Box::pin(async {}), 2, hook);
+        assert!(queue.is_empty());
 
-        worker.enqueue(Box::pin(YieldNow { yielded: false }), 3, hook);
-        worker.enqueue(
+        queue.enqueue(Box::pin(YieldNow { yielded: false }), 3, hook);
+        queue.enqueue(
             Box::pin(async {
                 YieldNow { yielded: false }.await;
                 panic!();
@@ -219,21 +328,21 @@ mod tests {
             4,
             hook,
         );
-        assert!(!worker.is_empty());
-        let mut sockets = worker.run_pending_tasks();
+        assert!(!queue.is_empty());
+        let mut sockets = queue.run_pending_tasks();
         sockets.sort();
         assert_eq!(sockets, [(3, true), (4, false)]);
-        assert!(worker.is_empty());
+        assert!(queue.is_empty());
     }
 
     #[test]
     fn cancel() {
-        let mut worker = QueueWorker::<()>::new();
-        worker.enqueue(Box::pin(std::future::pending()), 2, hook);
-        worker.enqueue(Box::pin(std::future::pending()), 3, hook);
-        worker.cancel(2);
-        assert!(!worker.is_empty());
-        worker.cancel(3);
-        assert!(worker.is_empty());
+        let mut queue = DelayedWorkQueue::<()>::new();
+        queue.enqueue(Box::pin(std::future::pending()), 2, hook);
+        queue.enqueue(Box::pin(std::future::pending()), 3, hook);
+        queue.cancel(2);
+        assert!(!queue.is_empty());
+        queue.cancel(3);
+        assert!(queue.is_empty());
     }
 }

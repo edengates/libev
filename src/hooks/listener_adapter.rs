@@ -16,7 +16,7 @@
 
 use crate::entities::channel::middleman::MessageChannel;
 use crate::events::GenericEvent;
-use crate::hooks::cast;
+use crate::utils::cast;
 use bytes::BytesMut;
 use std::any::Any;
 use std::io;
@@ -88,9 +88,9 @@ pub trait ListenerAdapter<I: Any + Send = BytesMut, O: Any + Send = BytesMut>: S
     ///
     /// [`InvalidInput`]: io::ErrorKind::InvalidInput
     /// [`NotConnected`]: io::ErrorKind::NotConnected
-    async fn enqueue(&mut self, channel: &mut MessageChannel<O, I>, message: O) -> io::Result<()> {
+    async fn write(&mut self, channel: &mut MessageChannel<O, I>, message: O) -> io::Result<()> {
         let message = cast(message).ok_or(io::ErrorKind::InvalidInput)?;
-        channel.enqueue(message)
+        channel.write(message)
     }
 
     /// Handles [`MessageChannel::close`] of the next listener.

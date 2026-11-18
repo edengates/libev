@@ -18,5 +18,9 @@
 //! These are used by libev itself and can also be useful for the library user!
 pub mod concurrent;
 pub(crate) mod config;
-mod socket_buffer_queue;
-pub(crate) use socket_buffer_queue::SocketBufferQueue;
+mod buffer;
+pub(crate) use buffer::Buffer;
+mod event_manager;
+pub(crate) use event_manager::{EventManager, EventManagerProvider, EventManagerProxy, EventQueue, cast};
+mod interfaced_event_manager;
+pub(crate) use interfaced_event_manager::InterfacedEventManager;

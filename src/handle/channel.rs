@@ -14,29 +14,30 @@
  * limitations under the License.
  */
 
-use crate::handle::{ChannelManager, BorrowedSocket};
-use crate::handle::socket_packet::SocketPacket;
+use crate::handle::BorrowedSocket;
+use crate::utils::concurrent::ScheduledExecutorService;
+use crate::handle::event::Event;
 use std::io;
 
-/// A handle that can be registered to a [`ChannelManager`].
-pub trait SocketHandler {
+/// A handle that can be registered to a [`ScheduledExecutorService`].
+pub trait Channel {
     fn socket(&self) -> BorrowedSocket<'_>;
 
-    fn connect(&mut self, manager: &mut ChannelManager) -> io::Result<bool>;
+    fn on_registered(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool>;
 
-    fn handle(&mut self, manager: &mut ChannelManager, data: io::Result<SocketPacket>) -> io::Result<bool>;
+    fn handle(&mut self, manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool>;
 
-    fn execute(&mut self, _manager: &mut ChannelManager) -> io::Result<bool> {
+    fn execute(&mut self, _manager: &mut ScheduledExecutorService) -> io::Result<bool> {
         Ok(true)
     }
 
-    fn shutdown(&mut self, _manager: &mut ChannelManager) -> io::Result<bool> {
+    fn shutdown(&mut self, _manager: &mut ScheduledExecutorService) -> io::Result<bool> {
         Ok(false)
     }
 
-    fn check_expired(&mut self, _manager: &mut ChannelManager) -> io::Result<bool> {
+    fn check_expired(&mut self, _manager: &mut ScheduledExecutorService) -> io::Result<bool> {
         Ok(true)
     }
 
-    fn close(&mut self, _manager: &mut ChannelManager) {}
+    fn close(&mut self, _manager: &mut ScheduledExecutorService) {}
 }

@@ -14,11 +14,21 @@
  * limitations under the License.
  */
 
-use crate::events::GenericEvent;
+use crate::events::{Event, GenericEvent};
 
 /// Indicates that a [`MessageChannel`] has been disconnected from the peer.
 ///
 /// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
 pub struct ChannelDisconnectEvent;
 
+impl ChannelDisconnectEvent {
+    pub const IDENTIFIER: usize = 1 << 4;
+}
+
 impl GenericEvent for ChannelDisconnectEvent {}
+
+impl Event for ChannelDisconnectEvent {
+    fn identifier(&self) -> usize {
+        Self::IDENTIFIER
+    }
+}

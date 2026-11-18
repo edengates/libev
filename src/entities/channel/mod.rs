@@ -15,7 +15,5 @@
  */
 
 //! Top-level abstractions related to channel types.
-mod channel;
-pub use channel::Channel;
 pub mod middleman;
 pub(crate) mod mixin;

@@ -18,7 +18,8 @@ use bytes::BytesMut;
 use libev::DefaultSocketManagerBuilder;
 use libev::entities::channel::middleman::MessageChannel;
 use libev::hooks::ListenerAdapter;
-use libev::utils::concurrent::{ScheduledThreadManager, SingleThreadManager, SingleThreadFactory};
+use libev::requests::sockactions::SocketAction;
+use libev::utils::concurrent::ScheduledThreadPoolExecutor;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::sync::mpsc::{self, Sender};
@@ -203,8 +204,8 @@ impl ListenerAdapter<BytesMut, String> for StringHandler {
         Ok(())
     }
 
-    async fn enqueue(&mut self, channel: &mut MessageChannel<String>, message: String) -> io::Result<()> {
-        channel.enqueue(BytesMut::from(message.as_bytes()))
+    async fn write(&mut self, channel: &mut MessageChannel<String>, message: String) -> io::Result<()> {
+        channel.write(BytesMut::from(message.as_bytes()))
     }
 }
 
@@ -269,9 +270,9 @@ impl ListenerAdapter for ErrorResponseAdapter {
 struct MessageCreateHandler;
 
 impl ListenerAdapter for MessageCreateHandler {
-    async fn enqueue(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+    async fn write(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
         channel.socket_manager().worker_pool().provide().delay(Duration::from_millis(50))?.await;
-        channel.enqueue(message)
+        channel.write(message)
     }
 }
 
@@ -309,8 +310,8 @@ impl ListenerAdapter for MessageBulkAdapter {
     }
 }
 
-fn shard_manager(shards_total: usize) -> ScheduledThreadManager<SingleThreadManager> {
-    ScheduledThreadManager::new(shards_total, SingleThreadFactory::new(64, socket_queue_factory())).unwrap()
+fn shard_manager(shards_total: usize) -> ScheduledThreadPoolExecutor {
+    ScheduledThreadPoolExecutor::new(shards_total, 64, socket_queue_factory()).unwrap()
 }
 
 #[test]

@@ -14,19 +14,20 @@
  * limitations under the License.
  */
 
-use crate::handle::{DISPATCH, SocketQueueManager};
+use crate::handle::CompletionService;
+use crate::utils::concurrent::DISPATCH;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::task::Wake;
 
-pub struct UnlockHook {
+pub struct ThreadWaker {
     response_number: usize,
     sender: Sender<usize>,
-    port: Arc<SocketQueueManager>,
+    port: Arc<CompletionService>,
 }
 
-impl UnlockHook {
-    pub(crate) fn new(response_number: usize, sender: Sender<usize>, port: Arc<SocketQueueManager>) -> Self {
+impl ThreadWaker {
+    pub(crate) fn new(response_number: usize, sender: Sender<usize>, port: Arc<CompletionService>) -> Self {
         Self {
             response_number,
             sender,
@@ -39,14 +40,14 @@ impl UnlockHook {
     }
 }
 
-impl Wake for UnlockHook {
+impl Wake for ThreadWaker {
     fn wake(self: Arc<Self>) {
         self.wake_by_ref();
     }
 
     fn wake_by_ref(self: &Arc<Self>) {
         if self.sender.send(self.response_number).is_ok() {
-            self.port.enqueue(DISPATCH).ok();
+            self.port.wakeup(DISPATCH).ok();
         }
     }
 }

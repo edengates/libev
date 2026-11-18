@@ -15,16 +15,17 @@
  */
 
 use crate::entities::channel::mixin::middleman::MessageChannelMixin;
-use crate::handle::SocketHandler;
-use crate::handle::socket_packet::SocketPacket;
-use crate::handle::{ChannelManager, BorrowedSocket, as_socket, socket};
+use crate::handle::Channel;
+use crate::handle::event::Event;
+use crate::handle::{BorrowedSocket, as_socket, socket};
+use crate::utils::concurrent::ScheduledExecutorService;
 use bytes::BytesMut;
 use log::debug;
 use std::io;
 use std::net::{SocketAddr, TcpStream};
 use std::rc::Rc;
 
-/// The [`SocketHandler`] shared by the platform socket channels.
+/// The [`Channel`] shared by the platform socket channels.
 pub(crate) trait SocketChannelMixin: Sized {
     fn stream(&self) -> &TcpStream;
 
@@ -36,29 +37,29 @@ pub(crate) trait SocketChannelMixin: Sized {
 
     fn receiving(&mut self) -> &mut bool;
 
-    fn complete(&mut self, manager: &mut ChannelManager, data: io::Result<SocketPacket>) -> io::Result<bool>;
+    fn complete(&mut self, manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool>;
 
     fn do_register(&self) -> io::Result<()> {
         Ok(())
     }
 
-    fn do_begin_read(&mut self, manager: &mut ChannelManager) -> io::Result<()>;
+    fn do_begin_read(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<()>;
 
-    fn do_write(&mut self, manager: &mut ChannelManager, messages: Vec<BytesMut>) -> io::Result<()>;
+    fn do_write(&mut self, manager: &mut ScheduledExecutorService, messages: Vec<BytesMut>) -> io::Result<()>;
 
-    fn do_close(&mut self, _manager: &mut ChannelManager) {}
+    fn do_close(&mut self, _manager: &mut ScheduledExecutorService) {}
 
-    fn ready(&mut self, manager: &mut ChannelManager) -> io::Result<bool> {
+    fn ready(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
         let socket_manager = self.channel().socket_manager();
         socket::init(self.stream(), socket_manager.tcp_no_delay(), socket_manager.close_timeout())?;
         self.channel().ready(manager);
-        SocketHandler::execute(self, manager)
+        Channel::execute(self, manager)
     }
 
-    fn send(&mut self, manager: &mut ChannelManager) -> io::Result<()> {
+    fn send(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<()> {
         if self.sending().is_none() {
             let limit = self.channel().socket_manager().packet_limit();
-            let messages = self.channel().buffer().borrow_mut().next_packet(limit);
+            let messages = self.channel().buffer().borrow_mut().read(limit);
             if !messages.is_empty() {
                 *self.sending() = Some(messages.iter().map(BytesMut::len).sum());
                 self.do_write(manager, messages)?;
@@ -67,25 +68,25 @@ pub(crate) trait SocketChannelMixin: Sized {
         Ok(())
     }
 
-    fn on_connected(&mut self, manager: &mut ChannelManager) -> io::Result<bool> {
+    fn on_connected(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
         *self.socket_address() = None;
         self.ready(manager)
     }
 
-    fn handle_response(&mut self, manager: &mut ChannelManager) -> io::Result<bool> {
+    fn handle_response(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
         if let Some(size) = self.sending().take() {
             self.channel().handle_response(size);
         }
-        SocketHandler::execute(self, manager)
+        Channel::execute(self, manager)
     }
 }
 
-impl<T: SocketChannelMixin> SocketHandler for T {
+impl<T: SocketChannelMixin> Channel for T {
     fn socket(&self) -> BorrowedSocket<'_> {
         as_socket(self.stream())
     }
 
-    fn connect(&mut self, manager: &mut ChannelManager) -> io::Result<bool> {
+    fn on_registered(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
         self.do_register()?;
         match *self.socket_address() {
             Some(address) => {
@@ -97,31 +98,31 @@ impl<T: SocketChannelMixin> SocketHandler for T {
         }
     }
 
-    fn handle(&mut self, manager: &mut ChannelManager, data: io::Result<SocketPacket>) -> io::Result<bool> {
+    fn handle(&mut self, manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool> {
         self.complete(manager, data)
     }
 
-    fn execute(&mut self, manager: &mut ChannelManager) -> io::Result<bool> {
+    fn execute(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
         let channel = Rc::clone(self.channel());
         channel.execute(manager);
         self.send(manager)?;
         if !*self.receiving()
             && !channel.is_connected()
-            && !channel.buffer().borrow().is_shutdown()
+            && channel.buffer().borrow().is_open()
             && !channel.buffer().borrow().is_deafened()
         {
             self.do_begin_read(manager)?;
             *self.receiving() = true;
         }
-        Ok(!channel.buffer().borrow().is_shutdown() || self.sending().is_some())
+        Ok(channel.buffer().borrow().is_open() || self.sending().is_some())
     }
 
-    fn shutdown(&mut self, manager: &mut ChannelManager) -> io::Result<bool> {
-        self.channel().buffer().borrow_mut().shutdown();
+    fn shutdown(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
+        self.channel().buffer().borrow_mut().close();
         self.execute(manager)
     }
 
-    fn check_expired(&mut self, manager: &mut ChannelManager) -> io::Result<bool> {
+    fn check_expired(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
         if self.socket_address().is_some() {
             debug!("Socket timed out");
             return Ok(false);
@@ -130,7 +131,7 @@ impl<T: SocketChannelMixin> SocketHandler for T {
         self.execute(manager)
     }
 
-    fn close(&mut self, manager: &mut ChannelManager) {
+    fn close(&mut self, manager: &mut ScheduledExecutorService) {
         self.channel().close(manager);
         self.do_close(manager);
     }

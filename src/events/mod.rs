@@ -27,6 +27,8 @@
 //! [`ListenerAdapter`]: crate::hooks::ListenerAdapter
 //! [`ChannelReadyEvent`]: channel::ChannelReadyEvent
 pub mod channel;
+mod event;
+pub(crate) use event::Event;
 mod generic_event;
 pub use generic_event::GenericEvent;
 pub mod message;

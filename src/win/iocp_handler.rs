@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-use crate::handle::SocketQueueFactory;
-use crate::handle::SocketQueueManager;
+use crate::handle::CompletionService;
+use std::io;
 
 /// IO handler which uses IO completion ports (IOCP) under the covers. Only works on Windows!
 pub struct IocpHandler;
 
 impl IocpHandler {
-    /// Returns a new [`SocketQueueFactory`] that creates IOCP instances.
-    pub fn new_factory() -> SocketQueueFactory {
-        SocketQueueFactory::new(|_| SocketQueueManager::new())
+    /// Returns a new factory that creates IOCP instances.
+    pub fn new_factory() -> fn(u32) -> io::Result<CompletionService> {
+        |_| CompletionService::new()
     }
 }

@@ -17,11 +17,13 @@
 use crate::SocketManager;
 use crate::entities::channel::middleman::MessageChannel;
 use crate::hooks::ListenerAdapter;
-use crate::entities::channel::Channel;
-use crate::hooks::{EventManager, EventQueue};
-use crate::requests::Command;
-use crate::handle::SocketStatus;
-use crate::utils::SocketBufferQueue;
+use crate::requests::Sink;
+use crate::utils::{EventManager, EventQueue};
+use crate::events::channel::update::ChannelUpdateSlowmodeEvent;
+use crate::events::channel::{ChannelDisconnectEvent, ChannelReadyEvent, ChannelTimeoutEvent};
+use crate::events::message::MessageReceivedEvent;
+use crate::events::{Event, GenericEvent};
+use crate::utils::Buffer;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -32,12 +34,12 @@ pub struct InterfacedEventManager<P: EventManager, L, O> {
     lower: P,
     listener: L,
     channel: MessageChannel<O, P::Output>,
-    events: EventQueue<O>,
+    events: EventQueue,
     outbound: Rc<RefCell<VecDeque<Command<O>>>>,
 }
 
 impl<P: EventManager, L, O: Any + Send> InterfacedEventManager<P, L, O> {
-    pub(crate) fn new(lower: P, listener: L, socket_manager: &SocketManager, buffer: &Rc<RefCell<SocketBufferQueue>>) -> Self {
+    pub(crate) fn new(lower: P, listener: L, socket_manager: &SocketManager, buffer: &Rc<RefCell<Buffer>>) -> Self {
         let events = EventQueue::default();
         let channel = MessageChannel::new(socket_manager.clone(), Rc::clone(buffer), Rc::clone(&events), lower.channel());
         Self {
@@ -56,24 +58,32 @@ where
     L: ListenerAdapter<P::Output, O> + 'static,
     O: Any + Send,
 {
-    async fn handle_event(&mut self, event: SocketStatus<P::Output>) -> io::Result<()> {
-        match event {
-            SocketStatus::ChannelReady(_) => self.listener.on_ready(&mut self.channel).await,
-            SocketStatus::MessageReceived(event) => {
+    async fn handle_event(&mut self, event: Box<dyn Event>) -> io::Result<()> {
+        match event.identifier() {
+            ChannelReadyEvent::IDENTIFIER => self.listener.on_ready(&mut self.channel).await,
+            MessageReceivedEvent::IDENTIFIER => {
+                let event = (event as Box<dyn Any>)
+                    .downcast::<MessageReceivedEvent<P::Output>>()
+                    .map_err(|_| io::ErrorKind::InvalidInput)?;
                 self.listener.on_message_received(&mut self.channel, event.message()).await
             }
-            SocketStatus::ChannelDisconnect(_) => self.listener.on_channel_disconnect(&mut self.channel).await,
-            SocketStatus::ChannelUpdateSlowmode(_) => self.listener.on_channel_update_slowmode(&mut self.channel).await,
-            SocketStatus::ChannelTimeout(_) => self.listener.on_channel_timeout(&mut self.channel).await,
-            SocketStatus::GenericEvent(event) => self.listener.on_generic_event(&mut self.channel, event).await,
+            ChannelDisconnectEvent::IDENTIFIER => self.listener.on_channel_disconnect(&mut self.channel).await,
+            ChannelUpdateSlowmodeEvent::IDENTIFIER => self.listener.on_channel_update_slowmode(&mut self.channel).await,
+            ChannelTimeoutEvent::IDENTIFIER => self.listener.on_channel_timeout(&mut self.channel).await,
+            _ => {
+                let event = (event as Box<dyn Any>)
+                    .downcast::<Box<dyn GenericEvent>>()
+                    .map_err(|_| io::ErrorKind::InvalidInput)?;
+                self.listener.on_generic_event(&mut self.channel, *event).await
+            }
         }
     }
 
     async fn handle_command(&mut self, command: Command<O>) -> io::Result<()> {
         match command {
-            Command::Enqueue(message) => self.listener.enqueue(&mut self.channel, message).await,
-            Command::Execute => {
-                self.channel.execute();
+            Command::Write(message) => self.listener.write(&mut self.channel, message).await,
+            Command::Flush => {
+                self.channel.flush();
                 Ok(())
             }
             Command::Close => self.listener.close(&mut self.channel).await,
@@ -89,12 +99,12 @@ where
 {
     type Output = O;
 
-    fn events(&self) -> &EventQueue<O> {
+    fn events(&self) -> &EventQueue {
         &self.events
     }
 
-    fn channel(&self) -> Rc<dyn Channel<O>> {
-        Rc::clone(&self.outbound) as Rc<dyn Channel<O>>
+    fn channel(&self) -> Rc<dyn Sink<O>> {
+        Rc::clone(&self.outbound) as Rc<dyn Sink<O>>
     }
 
     async fn handle(&mut self) -> io::Result<bool> {
@@ -119,4 +129,25 @@ where
 
 fn pop_front<T>(queue: &RefCell<VecDeque<T>>) -> Option<T> {
     queue.borrow_mut().pop_front()
+}
+
+enum Command<T> {
+    Write(T),
+    Flush,
+    Close,
+}
+
+impl<T> Sink<T> for RefCell<VecDeque<Command<T>>> {
+    fn write(&self, message: T) -> io::Result<()> {
+        self.borrow_mut().push_back(Command::Write(message));
+        Ok(())
+    }
+
+    fn flush(&self) {
+        self.borrow_mut().push_back(Command::Flush);
+    }
+
+    fn close(&self) {
+        self.borrow_mut().push_back(Command::Close);
+    }
 }

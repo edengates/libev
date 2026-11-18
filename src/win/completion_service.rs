@@ -23,12 +23,12 @@ use windows_sys::Win32::System::IO::{
     PostQueuedCompletionStatus,
 };
 
-pub struct SocketQueueManager {
+pub struct CompletionService {
     handle: HANDLE,
 }
 
-impl SocketQueueManager {
-    pub fn new() -> io::Result<Self> {
+impl CompletionService {
+    pub(crate) fn new() -> io::Result<Self> {
         let handle = unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, ptr::null_mut(), 0, 1) };
         if handle.is_null() {
             Err(io::Error::last_os_error())
@@ -37,7 +37,7 @@ impl SocketQueueManager {
         }
     }
 
-    pub fn enqueue(&self, id: usize) -> io::Result<()> {
+    pub(crate) fn wakeup(&self, id: usize) -> io::Result<()> {
         let status = unsafe { PostQueuedCompletionStatus(self.handle, 0, id, ptr::null_mut()) };
         if status == 0 {
             Err(io::Error::last_os_error())
@@ -46,7 +46,7 @@ impl SocketQueueManager {
         }
     }
 
-    pub fn poll(&self, entries: &mut [OVERLAPPED_ENTRY], timeout: u32) -> io::Result<usize> {
+    pub(crate) fn poll(&self, entries: &mut [OVERLAPPED_ENTRY], timeout: u32) -> io::Result<usize> {
         let mut count = 0;
         let data: i32 = unsafe {
             GetQueuedCompletionStatusEx(
@@ -74,7 +74,7 @@ impl SocketQueueManager {
         }
     }
 
-    pub fn register<S: AsRawSocket>(&self, socket: &S, id: usize) -> io::Result<()> {
+    pub(crate) fn register<S: AsRawSocket>(&self, socket: &S, id: usize) -> io::Result<()> {
         let handle = unsafe {
             CreateIoCompletionPort(socket.as_raw_socket() as HANDLE, self.handle, id, 0)
         };
@@ -86,11 +86,11 @@ impl SocketQueueManager {
     }
 }
 
-unsafe impl Send for SocketQueueManager {}
+unsafe impl Send for CompletionService {}
 
-unsafe impl Sync for SocketQueueManager {}
+unsafe impl Sync for CompletionService {}
 
-impl Drop for SocketQueueManager {
+impl Drop for CompletionService {
     fn drop(&mut self) {
         unsafe {
             CloseHandle(self.handle);
@@ -109,11 +109,11 @@ mod tests {
     }
 
     #[test]
-    fn enqueue() {
-        let manager = SocketQueueManager::new().unwrap();
+    fn wakeup() {
+        let manager = CompletionService::new().unwrap();
         let mut entries = entries();
-        manager.enqueue(7).unwrap();
-        manager.enqueue(9).unwrap();
+        manager.wakeup(7).unwrap();
+        manager.wakeup(9).unwrap();
         assert_eq!(manager.poll(&mut entries, 1000).unwrap(), 2);
         assert_eq!(entries[0].lpCompletionKey, 7);
         assert_eq!(entries[1].lpCompletionKey, 9);
@@ -121,17 +121,17 @@ mod tests {
 
     #[test]
     fn timeout() {
-        let manager = SocketQueueManager::new().unwrap();
+        let manager = CompletionService::new().unwrap();
         assert_eq!(manager.poll(&mut entries(), 0).unwrap(), 0);
     }
 
     #[test]
     fn register() {
-        let manager = SocketQueueManager::new().unwrap();
+        let manager = CompletionService::new().unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         manager.register(&listener, 2).unwrap();
         assert!(
-            SocketQueueManager::new()
+            CompletionService::new()
                 .unwrap()
                 .register(&listener, 2)
                 .is_err()

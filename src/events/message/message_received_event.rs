@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::events::GenericEvent;
+use crate::events::{Event, GenericEvent};
 use bytes::BytesMut;
 use std::any::Any;
 
@@ -23,6 +23,10 @@ use std::any::Any;
 /// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
 pub struct MessageReceivedEvent<T = BytesMut> {
     message: T,
+}
+
+impl MessageReceivedEvent {
+    pub const IDENTIFIER: usize = 1 << 1;
 }
 
 impl<T> MessageReceivedEvent<T> {
@@ -37,3 +41,9 @@ impl<T> MessageReceivedEvent<T> {
 }
 
 impl<T: Any + Send> GenericEvent for MessageReceivedEvent<T> {}
+
+impl<T: Any + Send> Event for MessageReceivedEvent<T> {
+    fn identifier(&self) -> usize {
+        MessageReceivedEvent::IDENTIFIER
+    }
+}

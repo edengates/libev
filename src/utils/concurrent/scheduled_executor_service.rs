@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
-use crate::handle::SocketHandler;
-use crate::handle::{ChannelState, SocketQueueManager, UnlockHook};
+use crate::handle::Channel;
+use crate::handle::{EventArray, CompletionService};
+use crate::utils::concurrent::ThreadWaker;
 use rustc_hash::FxHashMap;
-use crate::utils::concurrent::{QueueWorker, WorkTask};
+use futures_core::future::LocalBoxFuture;
+use crate::utils::concurrent::scheduled_thread_pool_executor::DelayedWorkQueue;
 use bytes::BytesMut;
 use log::{debug, error, warn};
 use std::io;
@@ -27,38 +29,38 @@ use std::sync::Arc;
 use std::task::Waker;
 use std::time::{Duration, Instant};
 
-pub type Task = Box<dyn FnOnce(&mut ChannelManager) + Send>;
+pub type Task = Box<dyn FnOnce(&mut ScheduledExecutorService) + Send>;
 
 pub const DISPATCH: usize = 0;
 pub const SHUTDOWN: usize = 1;
 
-/// Runs the sockets of one [`SingleThreadManager`](crate::utils::concurrent::SingleThreadManager) on its thread.
-pub struct ChannelManager {
-    pub(in crate::handle) port: Arc<SocketQueueManager>,
-    pub(in crate::handle) sockets: FxHashMap<usize, Box<dyn SocketHandler>>,
+/// Runs the sockets of one [`ExecutorCompletionService`](crate::utils::concurrent::ExecutorCompletionService) on its thread.
+pub struct ScheduledExecutorService {
+    pub(crate) port: Arc<CompletionService>,
+    pub(crate) sockets: FxHashMap<usize, Box<dyn Channel>>,
     sequence: usize,
-    unlock_hook: Option<Arc<UnlockHook>>,
-    pub(in crate::handle) socket_id: usize,
-    pub(in crate::handle) read_buffer: BytesMut,
-    pub(in crate::handle) state: ChannelState,
+    thread_waker: Option<Arc<ThreadWaker>>,
+    pub(crate) socket_id: usize,
+    pub(crate) read_buffer: BytesMut,
+    pub(crate) array: EventArray,
     is_stopped: bool,
-    pub(in crate::handle) is_shutdown: bool,
-    pub(in crate::handle) worker: QueueWorker<ChannelManager>,
+    pub(crate) is_shutdown: bool,
+    pub(crate) queue: DelayedWorkQueue<ScheduledExecutorService>,
 }
 
-impl ChannelManager {
-    pub(crate) fn new(port: Arc<SocketQueueManager>, capacity: usize) -> Self {
+impl ScheduledExecutorService {
+    pub(crate) fn new(port: Arc<CompletionService>, capacity: usize) -> Self {
         Self {
-            state: ChannelState::new(&port, capacity),
+            array: EventArray::new(&port, capacity),
             port,
             sockets: FxHashMap::default(),
             sequence: 2,
-            unlock_hook: None,
+            thread_waker: None,
             socket_id: 0,
             read_buffer: BytesMut::new(),
             is_stopped: false,
             is_shutdown: false,
-            worker: QueueWorker::new(),
+            queue: DelayedWorkQueue::new(),
         }
     }
 
@@ -78,12 +80,12 @@ impl ChannelManager {
     }
 
     pub(crate) fn is_shutdown(&self) -> bool {
-        self.is_shutdown || (self.is_stopped && self.sockets.is_empty() && self.worker.is_empty())
+        self.is_shutdown || (self.is_stopped && self.sockets.is_empty() && self.queue.is_empty())
     }
 
-    pub(in crate::handle) fn handle_event<F>(&mut self, key: usize, call: F)
+    pub(crate) fn handle_event<F>(&mut self, key: usize, call: F)
     where
-        F: FnOnce(&mut dyn SocketHandler, &mut ChannelManager) -> bool,
+        F: FnOnce(&mut dyn Channel, &mut ScheduledExecutorService) -> bool,
     {
         if let Some(mut handle) = self.sockets.remove(&key) {
             let socket_id = mem::replace(&mut self.socket_id, key);
@@ -107,19 +109,19 @@ impl ChannelManager {
 
     pub fn schedule<F>(&mut self, delay: Duration, task: F) -> (Instant, usize)
     where
-        F: FnOnce(&mut ChannelManager) + Send + 'static,
+        F: FnOnce(&mut ScheduledExecutorService) + Send + 'static,
     {
-        self.worker.schedule(delay, Box::new(task))
+        self.queue.schedule(delay, Box::new(task))
     }
 
     pub(crate) fn execute(&mut self) {
         let now = Instant::now();
-        while let Some(task) = self.worker.next(now) {
+        while let Some(task) = self.queue.next(now) {
             if panic::catch_unwind(AssertUnwindSafe(|| task(self))).is_err() {
                 error!("An error occurred while running the timeout callback");
             }
         }
-        for (socket_id, is_done) in self.worker.run_pending_tasks() {
+        for (socket_id, is_done) in self.queue.run_pending_tasks() {
             if is_done {
                 self.handle_event(socket_id, |handle, manager| matches!(handle.execute(manager), Ok(true)));
             } else {
@@ -131,24 +133,24 @@ impl ChannelManager {
     /// # Panics
     ///
     /// Panics if the first poll of `task` panics.
-    pub(crate) fn enqueue(&mut self, task: WorkTask) {
+    pub(crate) fn enqueue(&mut self, task: LocalBoxFuture<'static, ()>) {
         let port = &self.port;
-        let unlock_hook = &mut self.unlock_hook;
-        self.worker.enqueue(task, self.socket_id, |response_number, sender| {
-            match unlock_hook.as_mut().and_then(Arc::get_mut) {
+        let thread_waker = &mut self.thread_waker;
+        self.queue.enqueue(task, self.socket_id, |response_number, sender| {
+            match thread_waker.as_mut().and_then(Arc::get_mut) {
                 Some(hook) => hook.set_response_number(response_number),
                 None => {
-                    *unlock_hook = Some(Arc::new(UnlockHook::new(response_number, sender.clone(), Arc::clone(port))));
+                    *thread_waker = Some(Arc::new(ThreadWaker::new(response_number, sender.clone(), Arc::clone(port))));
                 }
             }
-            Waker::from(unlock_hook.clone().unwrap())
+            Waker::from(thread_waker.clone().unwrap())
         });
     }
 
     /// # Panics
     ///
-    /// Panics if [`SocketHandler::connect`] panics.
-    pub fn register(&mut self, mut handle: Box<dyn SocketHandler>) -> io::Result<()> {
+    /// Panics if [`Channel::on_registered`] panics.
+    pub fn register(&mut self, mut handle: Box<dyn Channel>) -> io::Result<()> {
         if self.is_stopped {
             debug!("Rejected task after shutdown");
             return Err(io::ErrorKind::BrokenPipe.into());
@@ -157,7 +159,7 @@ impl ChannelManager {
         self.sequence += 1;
         self.port.register(&handle.socket(), key)?;
         let socket_id = mem::replace(&mut self.socket_id, key);
-        let data = handle.connect(self);
+        let data = handle.on_registered(self);
         self.socket_id = socket_id;
         if let Ok(true) = data {
             self.sockets.insert(key, handle);
@@ -175,25 +177,25 @@ impl ChannelManager {
 
     pub fn setup_keep_alive(&mut self, delay: Duration) {
         let key = self.socket_id;
-        self.worker.setup_keep_alive(
+        self.queue.setup_keep_alive(
             key,
             delay,
-            Box::new(move |manager: &mut ChannelManager| {
+            Box::new(move |manager: &mut ScheduledExecutorService| {
                 manager.handle_event(key, |handle, manager| matches!(handle.check_expired(manager), Ok(true)));
             }),
         );
     }
 
     fn stop_keep_alive(&mut self, key: usize) {
-        self.worker.stop_keep_alive(key);
+        self.queue.stop_keep_alive(key);
     }
 
     pub(crate) fn deadline(&mut self, delay: Duration) {
         let key = self.socket_id;
-        self.schedule(delay, move |manager| manager.worker.cancel(key));
+        self.schedule(delay, move |manager| manager.queue.cancel(key));
     }
 
-    pub(in crate::handle) fn close_resource(&mut self, key: usize, mut handle: Box<dyn SocketHandler>) {
+    pub(crate) fn close_resource(&mut self, key: usize, mut handle: Box<dyn Channel>) {
         let socket_id = mem::replace(&mut self.socket_id, key);
         panic::catch_unwind(AssertUnwindSafe(|| {
             handle.close(self);
@@ -204,14 +206,14 @@ impl ChannelManager {
     }
 
     fn reconnect(&mut self, key: usize) {
-        self.handle_event(key, |handle, manager| matches!(handle.connect(manager), Ok(true)));
+        self.handle_event(key, |handle, manager| matches!(handle.on_registered(manager), Ok(true)));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::handle::socket_packet::SocketPacket;
+    use crate::handle::event::Event;
     use std::net::TcpListener;
     #[cfg(unix)]
     use std::os::fd::{AsFd, BorrowedFd};
@@ -223,7 +225,7 @@ mod tests {
         active: bool,
     }
 
-    impl SocketHandler for HeartbeatChannel {
+    impl Channel for HeartbeatChannel {
         #[cfg(unix)]
         fn socket(&self) -> BorrowedFd<'_> {
             self.listener.as_fd()
@@ -234,25 +236,25 @@ mod tests {
             self.listener.as_socket()
         }
 
-        fn connect(&mut self, manager: &mut ChannelManager) -> io::Result<bool> {
+        fn on_registered(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
             manager.setup_keep_alive(Duration::from_secs(60));
             manager.setup_keep_alive(Duration::from_secs(60));
             Ok(self.active)
         }
 
-        fn handle(&mut self, _manager: &mut ChannelManager, _data: io::Result<SocketPacket>) -> io::Result<bool> {
+        fn handle(&mut self, _manager: &mut ScheduledExecutorService, _data: io::Result<Event>) -> io::Result<bool> {
             Ok(true)
         }
     }
 
     #[cfg(target_os = "linux")]
-    fn manager() -> ChannelManager {
-        ChannelManager::new(Arc::new(crate::handle::SocketQueueFactory::default().new_manager(64).unwrap()), 64)
+    fn manager() -> ScheduledExecutorService {
+        ScheduledExecutorService::new(Arc::new(crate::handle::DefaultHandler::new_factory()(64).unwrap()), 64)
     }
 
     #[cfg(any(windows, target_os = "macos", target_os = "freebsd"))]
-    fn manager() -> ChannelManager {
-        ChannelManager::new(Arc::new(SocketQueueManager::new().unwrap()), 64)
+    fn manager() -> ScheduledExecutorService {
+        ScheduledExecutorService::new(Arc::new(CompletionService::new().unwrap()), 64)
     }
 
     fn channel(active: bool) -> Box<HeartbeatChannel> {
@@ -266,9 +268,9 @@ mod tests {
     fn keep_alive() {
         let mut manager = manager();
         manager.register(channel(true)).unwrap();
-        assert_eq!(manager.worker.len(), 1);
+        assert_eq!(manager.queue.len(), 1);
         manager.register(channel(false)).unwrap();
-        assert_eq!(manager.worker.len(), 1);
+        assert_eq!(manager.queue.len(), 1);
         assert_eq!(manager.sockets.len(), 1);
     }
 
@@ -284,18 +286,18 @@ mod tests {
     fn enqueue() {
         let mut manager = manager();
         manager.enqueue(Box::pin(async {}));
-        let hook = Arc::as_ptr(manager.unlock_hook.as_ref().unwrap());
+        let hook = Arc::as_ptr(manager.thread_waker.as_ref().unwrap());
         manager.enqueue(Box::pin(async {}));
-        assert_eq!(Arc::as_ptr(manager.unlock_hook.as_ref().unwrap()), hook);
+        assert_eq!(Arc::as_ptr(manager.thread_waker.as_ref().unwrap()), hook);
         manager.enqueue(Box::pin(std::future::pending()));
         manager.enqueue(Box::pin(async {}));
-        assert_ne!(Arc::as_ptr(manager.unlock_hook.as_ref().unwrap()), hook);
+        assert_ne!(Arc::as_ptr(manager.thread_waker.as_ref().unwrap()), hook);
     }
 
     #[test]
     fn shutdown() {
         let mut manager = manager();
-        manager.port.enqueue(SHUTDOWN).unwrap();
+        manager.port.wakeup(SHUTDOWN).unwrap();
         manager.run_worker().unwrap();
         assert!(manager.is_shutdown());
     }

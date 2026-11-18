@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::events::GenericEvent;
+use crate::events::{Event, GenericEvent};
 
 /// Indicates that a [`MessageChannel`]'s slow mode has been updated.
 ///
@@ -24,4 +24,14 @@ use crate::events::GenericEvent;
 /// [`MessageChannel::is_locked`]: crate::entities::channel::middleman::MessageChannel::is_locked
 pub struct ChannelUpdateSlowmodeEvent;
 
+impl ChannelUpdateSlowmodeEvent {
+    pub const IDENTIFIER: usize = 1 << 2;
+}
+
 impl GenericEvent for ChannelUpdateSlowmodeEvent {}
+
+impl Event for ChannelUpdateSlowmodeEvent {
+    fn identifier(&self) -> usize {
+        Self::IDENTIFIER
+    }
+}

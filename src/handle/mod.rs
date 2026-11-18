@@ -22,18 +22,11 @@
 mod platform;
 pub(crate) use platform::*;
 pub use platform::transport::*;
+pub use platform::CompletionService;
 
-mod channel_manager;
-pub(crate) use channel_manager::{ChannelManager, DISPATCH, SHUTDOWN, Task};
 #[cfg(any(windows, target_os = "linux"))]
 mod socket_channel_mixin;
 #[cfg(any(windows, target_os = "linux"))]
 pub(crate) use socket_channel_mixin::SocketChannelMixin;
-mod socket_handler;
-pub(crate) use socket_handler::SocketHandler;
-mod socket_queue_factory;
-pub use socket_queue_factory::SocketQueueFactory;
-mod socket_status;
-pub(crate) use socket_status::SocketStatus;
-mod unlock_hook;
-pub(crate) use unlock_hook::UnlockHook;
+mod channel;
+pub(crate) use channel::Channel;

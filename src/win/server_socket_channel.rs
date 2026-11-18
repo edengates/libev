@@ -15,9 +15,10 @@
  */
 
 use crate::SocketManager;
-use crate::handle::SocketHandler;
-use crate::handle::socket_packet::{self, SocketPacket};
-use crate::handle::ChannelManager;
+use crate::handle::Channel;
+use crate::handle::event::Event;
+use crate::handle::socket;
+use crate::utils::concurrent::ScheduledExecutorService;
 use crate::handle::SocketChannel;
 use log::warn;
 use std::io;
@@ -25,14 +26,14 @@ use std::net::TcpListener;
 use std::os::windows::io::{AsSocket, BorrowedSocket};
 use std::time::Duration;
 
-pub struct SessionController {
+pub struct ServerSocketChannel {
     listener: TcpListener,
     socket_manager: SocketManager,
     queued: usize,
     reconnect_delay: Duration,
 }
 
-impl SessionController {
+impl ServerSocketChannel {
     pub fn new(listener: TcpListener, socket_manager: SocketManager) -> Self {
         let reconnect_delay = socket_manager.reconnect_delay();
         Self {
@@ -44,12 +45,12 @@ impl SessionController {
     }
 }
 
-impl SocketHandler for SessionController {
+impl Channel for ServerSocketChannel {
     fn socket(&self) -> BorrowedSocket<'_> {
         self.listener.as_socket()
     }
 
-    fn connect(&mut self, manager: &mut ChannelManager) -> io::Result<bool> {
+    fn on_registered(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
         while self.queued < self.socket_manager.concurrency() {
             if let Err(error) = manager.accept(&self.listener) {
                 if self.queued == 0 {
@@ -68,12 +69,12 @@ impl SocketHandler for SessionController {
 
     fn handle(
         &mut self,
-        manager: &mut ChannelManager,
-        data: io::Result<SocketPacket>,
+        manager: &mut ScheduledExecutorService,
+        data: io::Result<Event>,
     ) -> io::Result<bool> {
         self.queued -= 1;
         if let Ok(stream) =
-            data.and_then(|packet| socket_packet::accepted(&self.listener, packet))
+            data.and_then(|packet| socket::accepted(&self.listener, packet))
         {
             let socket_manager = self.socket_manager.clone();
             self.socket_manager
@@ -81,6 +82,6 @@ impl SocketHandler for SessionController {
                 .provide()
                 .register(move || Box::new(SocketChannel::new(stream, socket_manager)));
         }
-        self.connect(manager)
+        self.on_registered(manager)
     }
 }

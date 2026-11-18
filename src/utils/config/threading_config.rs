@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-use crate::utils::concurrent::{ScheduledThreadManager, SingleThreadManager};
+use crate::utils::concurrent::ScheduledThreadPoolExecutor;
 use std::io;
 use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 pub struct ThreadingConfig {
-    worker_pool: ScheduledThreadManager<SingleThreadManager>,
-    socket_pool: ScheduledThreadManager<SingleThreadManager>,
+    worker_pool: ScheduledThreadPoolExecutor,
+    socket_pool: ScheduledThreadPoolExecutor,
     backlog: i32,
     concurrency: usize,
     buffer_size: usize,
@@ -36,8 +36,8 @@ pub struct ThreadingConfig {
 
 impl ThreadingConfig {
     pub fn new(
-        socket_pool: ScheduledThreadManager<SingleThreadManager>,
-        worker_pool: ScheduledThreadManager<SingleThreadManager>,
+        socket_pool: ScheduledThreadPoolExecutor,
+        worker_pool: ScheduledThreadPoolExecutor,
         backlog: i32,
         concurrency: usize,
         buffer_size: usize,
@@ -65,11 +65,11 @@ impl ThreadingConfig {
         }
     }
 
-    pub fn socket_pool(&self) -> &ScheduledThreadManager<SingleThreadManager> {
+    pub fn socket_pool(&self) -> &ScheduledThreadPoolExecutor {
         &self.socket_pool
     }
 
-    pub fn worker_pool(&self) -> &ScheduledThreadManager<SingleThreadManager> {
+    pub fn worker_pool(&self) -> &ScheduledThreadPoolExecutor {
         &self.worker_pool
     }
 

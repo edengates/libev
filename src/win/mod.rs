@@ -15,7 +15,7 @@
  */
 
 use crate::SocketManager;
-use crate::utils::concurrent::SingleThreadManager;
+use crate::utils::concurrent::ExecutorCompletionService;
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 pub(crate) use std::os::windows::io::BorrowedSocket;
@@ -23,33 +23,33 @@ use std::os::windows::io::AsSocket;
 use std::sync::mpsc::Receiver;
 
 pub mod socket;
-pub mod socket_packet;
-mod socket_queue_manager;
-pub use socket_queue_manager::SocketQueueManager;
-mod channel_manager;
-pub use channel_manager::ChannelState;
+pub mod event;
+mod completion_service;
+pub use completion_service::CompletionService;
+mod scheduled_executor_service;
+pub use scheduled_executor_service::EventArray;
 mod socket_channel;
 pub use socket_channel::SocketChannel;
-mod session_controller;
-pub use session_controller::SessionController;
+mod server_socket_channel;
+pub use server_socket_channel::ServerSocketChannel;
 mod iocp_handler;
 
 pub mod transport {
     pub use super::iocp_handler::IocpHandler;
-}
 
-pub(crate) type DefaultHandler = iocp_handler::IocpHandler;
+    pub type DefaultHandler = IocpHandler;
+}
 
 pub(crate) fn as_socket(stream: &TcpStream) -> BorrowedSocket<'_> {
     stream.as_socket()
 }
 
-pub(crate) fn bind(pool: &SingleThreadManager, listener: TcpListener, socket_manager: SocketManager) -> Receiver<io::Result<()>> {
-    pool.register(move || Box::new(SessionController::new(listener, socket_manager)))
+pub(crate) fn bind(pool: &ExecutorCompletionService, listener: TcpListener, socket_manager: SocketManager) -> Receiver<io::Result<()>> {
+    pool.register(move || Box::new(ServerSocketChannel::new(listener, socket_manager)))
 }
 
 pub(crate) fn connect(
-    pool: &SingleThreadManager,
+    pool: &ExecutorCompletionService,
     socket: TcpStream,
     address: SocketAddr,
     socket_manager: SocketManager,

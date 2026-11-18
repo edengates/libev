@@ -16,11 +16,10 @@
 
 use crate::SocketManager;
 use crate::entities::channel::mixin::middleman::MessageChannelMixin;
-use crate::entities::channel::Channel;
-use crate::handle::SocketStatus;
-use crate::utils::SocketBufferQueue;
-use crate::utils::concurrent::WorkTask;
-use bytes::BytesMut;
+use crate::requests::Sink;
+use crate::events::Event;
+use crate::utils::Buffer;
+use futures_core::future::LocalBoxFuture;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -28,31 +27,31 @@ use std::io;
 use std::rc::Rc;
 use std::sync::Arc;
 
-pub type EventQueue<T> = Rc<RefCell<VecDeque<SocketStatus<T>>>>;
+pub type EventQueue = Rc<RefCell<VecDeque<Box<dyn Event>>>>;
 
 pub type EventManagerProvider =
-    Arc<dyn Fn(&SocketManager, &Rc<RefCell<SocketBufferQueue>>, &EventQueue<BytesMut>) -> Rc<dyn EventTask> + Send + Sync>;
+    Arc<dyn Fn(&SocketManager, &Rc<RefCell<Buffer>>, &EventQueue) -> Rc<dyn EventManagerProxy> + Send + Sync>;
 
 /// An interface for libev's event manager system.
 #[allow(async_fn_in_trait)]
 pub trait EventManager: 'static {
     type Output: Any + Send;
 
-    fn events(&self) -> &EventQueue<Self::Output>;
+    fn events(&self) -> &EventQueue;
 
-    fn channel(&self) -> Rc<dyn Channel<Self::Output>>;
+    fn channel(&self) -> Rc<dyn Sink<Self::Output>>;
 
     async fn handle(&mut self) -> io::Result<bool>;
 
     fn clear(&mut self);
 }
 
-pub trait EventTask {
-    fn handle(self: Rc<Self>, channel: Rc<MessageChannelMixin>) -> WorkTask;
+pub trait EventManagerProxy {
+    fn handle(self: Rc<Self>, channel: Rc<MessageChannelMixin>) -> LocalBoxFuture<'static, ()>;
 }
 
-impl<P: EventManager> EventTask for RefCell<P> {
-    fn handle(self: Rc<Self>, channel: Rc<MessageChannelMixin>) -> WorkTask {
+impl<P: EventManager> EventManagerProxy for RefCell<P> {
+    fn handle(self: Rc<Self>, channel: Rc<MessageChannelMixin>) -> LocalBoxFuture<'static, ()> {
         Box::pin(async move {
             let mut data = Ok(true);
             while let Ok(true) = data {
@@ -60,7 +59,7 @@ impl<P: EventManager> EventTask for RefCell<P> {
                 self.borrow().events().borrow_mut().clear();
             }
             if data.is_err() {
-                channel.buffer().borrow_mut().shutdown();
+                channel.buffer().borrow_mut().close();
                 self.borrow_mut().clear();
             }
             channel.connect(false);

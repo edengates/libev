@@ -14,5 +14,20 @@
  * limitations under the License.
  */
 
-mod message_create_action;
-pub use message_create_action::MessageCreateAction;
+use std::io;
+
+pub trait SocketAction<T>: Sized {
+    fn complete(self) -> io::Result<T>;
+
+    fn queue<S, F>(self, success: S, failure: F) -> io::Result<()>
+    where
+        S: FnOnce(T),
+        F: FnOnce(io::Error),
+    {
+        match self.complete() {
+            Ok(value) => success(value),
+            Err(error) => failure(error),
+        }
+        Ok(())
+    }
+}

@@ -14,16 +14,7 @@
  * limitations under the License.
  */
 
-use crate::events::GenericEvent;
-use crate::events::channel::update::ChannelUpdateSlowmodeEvent;
-use crate::events::channel::{ChannelDisconnectEvent, ChannelReadyEvent, ChannelTimeoutEvent};
-use crate::events::message::MessageReceivedEvent;
-
-pub enum SocketStatus<T> {
-    ChannelReady(ChannelReadyEvent),
-    MessageReceived(MessageReceivedEvent<T>),
-    ChannelDisconnect(ChannelDisconnectEvent),
-    ChannelUpdateSlowmode(ChannelUpdateSlowmodeEvent),
-    ChannelTimeout(ChannelTimeoutEvent),
-    GenericEvent(Box<dyn GenericEvent>),
-}
+mod socket_action;
+pub use socket_action::SocketAction;
+mod message_create_action;
+pub use message_create_action::MessageCreateAction;

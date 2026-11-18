@@ -15,6 +15,7 @@
  */
 
 //! Interactions between the listeners of a channel, such as the requests to write, send or close it.
-pub mod objactions;
-mod command;
-pub(crate) use command::Command;
+pub mod sockactions;
+mod buffered_sink;
+pub use buffered_sink::Sink;
+pub(crate) use buffered_sink::BufferedSink;

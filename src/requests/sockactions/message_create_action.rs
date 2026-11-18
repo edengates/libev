@@ -15,10 +15,10 @@
  */
 
 use crate::entities::channel::middleman::MessageChannel;
+use crate::requests::sockactions::SocketAction;
 use std::future::{self, IntoFuture, Ready};
 use std::io;
 
-//todo: rename
 #[must_use]
 pub struct MessageCreateAction<'a, N, P> {
     channel: &'a mut MessageChannel<N, P>,
@@ -29,22 +29,12 @@ impl<'a, N, P> MessageCreateAction<'a, N, P> {
     pub(crate) fn new(channel: &'a mut MessageChannel<N, P>, message: P) -> Self {
         Self { channel, message }
     }
+}
 
-    pub fn queue<S, F>(self, success: S, failure: F) -> io::Result<()>
-    where
-        S: FnOnce(()),
-        F: FnOnce(io::Error),
-    {
-        match self.complete() {
-            Ok(()) => success(()),
-            Err(error) => failure(error),
-        }
-        Ok(())
-    }
-
-    pub fn complete(self) -> io::Result<()> {
-        let data = self.channel.enqueue(self.message);
-        self.channel.execute();
+impl<N, P> SocketAction<()> for MessageCreateAction<'_, N, P> {
+    fn complete(self) -> io::Result<()> {
+        let data = self.channel.write(self.message);
+        self.channel.flush();
         data
     }
 }

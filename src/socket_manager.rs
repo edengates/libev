@@ -14,12 +14,11 @@
  * limitations under the License.
  */
 
-use crate::utils::concurrent::{ScheduledThreadManager, SingleThreadManager};
-use crate::hooks::{EventQueue, EventManagerProvider, EventTask};
+use crate::utils::concurrent::ScheduledThreadPoolExecutor;
+use crate::utils::{EventQueue, EventManagerProvider, EventManagerProxy};
 use crate::handle::{self, socket};
-use crate::utils::SocketBufferQueue;
+use crate::utils::Buffer;
 use crate::utils::config::{SocketConfig, ThreadingConfig};
-use bytes::BytesMut;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -63,12 +62,12 @@ impl SocketManager {
     }
 
     /// The pool used for the channels created by [`connect`](Self::connect) and for the accepted connections.
-    pub fn worker_pool(&self) -> &ScheduledThreadManager<SingleThreadManager> {
+    pub fn worker_pool(&self) -> &ScheduledThreadPoolExecutor {
         self.inner.threading_config.worker_pool()
     }
 
     /// The pool used for the sockets bound by [`bind`](Self::bind).
-    pub fn socket_pool(&self) -> &ScheduledThreadManager<SingleThreadManager> {
+    pub fn socket_pool(&self) -> &ScheduledThreadPoolExecutor {
         self.inner.threading_config.socket_pool()
     }
 
@@ -162,11 +161,11 @@ impl SocketManager {
         &self.inner.context_map
     }
 
-    pub(crate) fn task(
+    pub(crate) fn proxy(
         &self,
-        buffer: &Rc<RefCell<SocketBufferQueue>>,
-        inbound: &EventQueue<BytesMut>,
-    ) -> Rc<dyn EventTask> {
+        buffer: &Rc<RefCell<Buffer>>,
+        inbound: &EventQueue,
+    ) -> Rc<dyn EventManagerProxy> {
         (self.inner.provider)(self, buffer, inbound)
     }
 

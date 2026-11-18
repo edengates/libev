@@ -18,12 +18,12 @@ use crate::utils::concurrent::CountingThreadFactory;
 use std::io;
 
 /// Executor which creates a new thread for each task, used for blocking execution.
-pub struct ElasticThreadManager {
+pub struct ThreadPerTaskExecutor {
     thread_factory: CountingThreadFactory,
 }
 
-impl ElasticThreadManager {
-    /// Creates a new [`ElasticThreadManager`].
+impl ThreadPerTaskExecutor {
+    /// Creates a new [`ThreadPerTaskExecutor`].
     pub fn new(thread_factory: CountingThreadFactory) -> Self {
         Self { thread_factory }
     }
@@ -51,7 +51,7 @@ mod tests {
     #[test]
     fn execute() {
         let factory = CountingThreadFactory::new(|| "Test", "Executor");
-        let manager = ElasticThreadManager::new(factory);
+        let manager = ThreadPerTaskExecutor::new(factory);
         let (sender, receiver) = mpsc::channel();
         manager
             .execute(move || sender.send(thread::current().name().unwrap().to_string()).unwrap())

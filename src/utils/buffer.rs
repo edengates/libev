@@ -18,43 +18,43 @@ use bytes::BytesMut;
 use std::{io, mem};
 
 #[derive(Default)]
-pub struct SocketBufferQueue {
+pub struct Buffer {
     queued: Vec<BytesMut>,
     ready: Vec<BytesMut>,
-    shutdown: bool,
-    queue_size: usize,
+    closed: bool,
+    size: usize,
     slowmode: bool,
     slowmode_changed: bool,
     deafened: bool,
 }
 
-impl SocketBufferQueue {
+impl Buffer {
     fn update(&mut self, threshold: usize, large_threshold: usize) {
         let slowmode = if self.slowmode {
-            self.queue_size >= threshold
+            self.size >= threshold
         } else {
-            self.queue_size > large_threshold
+            self.size > large_threshold
         };
         self.slowmode_changed |= slowmode != self.slowmode;
         self.slowmode = slowmode;
     }
 
-    pub fn enqueue(&mut self, message: BytesMut, threshold: usize, large_threshold: usize) -> io::Result<()> {
-        if self.shutdown {
+    pub fn write(&mut self, message: BytesMut, threshold: usize, large_threshold: usize) -> io::Result<()> {
+        if self.closed {
             return Err(io::ErrorKind::NotConnected.into());
         }
-        self.queue_size += message.len();
+        self.size += message.len();
         self.update(threshold, large_threshold);
         self.queued.push(message);
         Ok(())
     }
 
-    pub fn handle_response(&mut self, size: usize, threshold: usize, large_threshold: usize) {
-        self.queue_size -= size;
+    pub fn skip(&mut self, size: usize, threshold: usize, large_threshold: usize) {
+        self.size -= size;
         self.update(threshold, large_threshold);
     }
 
-    pub fn execute(&mut self) {
+    pub fn emit(&mut self) {
         if self.ready.is_empty() {
             mem::swap(&mut self.ready, &mut self.queued);
         } else {
@@ -62,7 +62,7 @@ impl SocketBufferQueue {
         }
     }
 
-    pub fn next_packet(&mut self, limit: usize) -> Vec<BytesMut> {
+    pub fn read(&mut self, limit: usize) -> Vec<BytesMut> {
         if self.ready.len() <= limit {
             mem::take(&mut self.ready)
         } else {
@@ -71,7 +71,7 @@ impl SocketBufferQueue {
         }
     }
 
-    pub fn recycle(&mut self, mut packet: Vec<BytesMut>) {
+    pub fn reuse(&mut self, mut packet: Vec<BytesMut>) {
         if self.queued.capacity() == 0 {
             packet.clear();
             self.queued = packet;
@@ -86,12 +86,12 @@ impl SocketBufferQueue {
         self.slowmode
     }
 
-    pub fn shutdown(&mut self) {
-        self.shutdown = true;
+    pub fn close(&mut self) {
+        self.closed = true;
     }
 
-    pub fn is_shutdown(&self) -> bool {
-        self.shutdown
+    pub fn is_open(&self) -> bool {
+        !self.closed
     }
 
     pub fn set_deafened(&mut self, deafened: bool) {
@@ -109,18 +109,18 @@ mod tests {
 
     #[test]
     fn slowmode() {
-        let mut buffer = SocketBufferQueue::default();
-        buffer.enqueue(BytesMut::zeroed(40 * 1024), 32 * 1024, 64 * 1024).unwrap();
+        let mut buffer = Buffer::default();
+        buffer.write(BytesMut::zeroed(40 * 1024), 32 * 1024, 64 * 1024).unwrap();
         assert!(!buffer.is_slowmode());
-        buffer.enqueue(BytesMut::zeroed(40 * 1024), 32 * 1024, 64 * 1024).unwrap();
+        buffer.write(BytesMut::zeroed(40 * 1024), 32 * 1024, 64 * 1024).unwrap();
         assert!(buffer.is_slowmode());
         assert!(buffer.take_slowmode_change());
 
-        buffer.handle_response(40 * 1024, 32 * 1024, 64 * 1024);
+        buffer.skip(40 * 1024, 32 * 1024, 64 * 1024);
         assert!(buffer.is_slowmode());
         assert!(!buffer.take_slowmode_change());
 
-        buffer.handle_response(10 * 1024, 32 * 1024, 64 * 1024);
+        buffer.skip(10 * 1024, 32 * 1024, 64 * 1024);
         assert!(!buffer.is_slowmode());
         assert!(buffer.take_slowmode_change());
     }

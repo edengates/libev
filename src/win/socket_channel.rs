@@ -16,10 +16,11 @@
 
 use crate::SocketManager;
 use crate::entities::channel::mixin::middleman::MessageChannelMixin;
-use crate::handle::SocketHandler;
+use crate::handle::Channel;
 use crate::handle::socket;
-use crate::handle::socket_packet::{SocketPacket, Type};
-use crate::handle::{ChannelManager, SocketChannelMixin};
+use crate::handle::event::Event;
+use crate::handle::SocketChannelMixin;
+use crate::utils::concurrent::ScheduledExecutorService;
 use bytes::BytesMut;
 use std::io;
 use std::net::{Shutdown, SocketAddr, TcpStream};
@@ -63,7 +64,7 @@ impl SocketChannel {
         channel
     }
 
-    fn read(&mut self, manager: &mut ChannelManager) -> io::Result<bool> {
+    fn read(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
         self.receiving = false;
         let buffer_size = self.channel.socket_manager().buffer_size();
         for _ in 0..self.channel.socket_manager().chunk_limit() {
@@ -79,14 +80,14 @@ impl SocketChannel {
                     self.send(manager)?;
                     if length < buffer_size
                         || self.channel.is_connected()
-                        || self.channel.buffer().borrow().is_shutdown()
+                        || !self.channel.buffer().borrow().is_open()
                         || self.channel.buffer().borrow().is_deafened()
                     {
                         break;
                     }
                 }
                 Ok((0, _)) => {
-                    self.channel.buffer().borrow_mut().shutdown();
+                    self.channel.buffer().borrow_mut().close();
                     break;
                 }
                 _ => return Ok(false),
@@ -117,26 +118,26 @@ impl SocketChannelMixin for SocketChannel {
         &mut self.receiving
     }
 
-    fn complete(&mut self, manager: &mut ChannelManager, data: io::Result<SocketPacket>) -> io::Result<bool> {
+    fn complete(&mut self, manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool> {
         let Ok(content) = data else {
             return Ok(false);
         };
-        match content.method() {
-            Type::Connect => {
+        match content.opcode() {
+            Event::CONNECT => {
                 socket::connected(&self.socket)?;
                 self.on_connected(manager)
             }
-            Type::Read => self.read(manager),
-            Type::Write => self.handle_response(manager),
-            Type::Accept => Ok(false),
+            Event::READ => self.read(manager),
+            Event::WRITE => self.handle_response(manager),
+            _ => Ok(false),
         }
     }
 
-    fn do_begin_read(&mut self, manager: &mut ChannelManager) -> io::Result<()> {
-        manager.read(&self.socket, SocketPacket::new(0))
+    fn do_begin_read(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<()> {
+        manager.read(&self.socket, Event::new(0))
     }
 
-    fn do_write(&mut self, manager: &mut ChannelManager, messages: Vec<BytesMut>) -> io::Result<()> {
-        manager.write(&self.socket, SocketPacket::wrap(messages))
+    fn do_write(&mut self, manager: &mut ScheduledExecutorService, messages: Vec<BytesMut>) -> io::Result<()> {
+        manager.write(&self.socket, Event::wrap(messages))
     }
 }

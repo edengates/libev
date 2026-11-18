@@ -22,7 +22,7 @@ use std::task::{Context, Poll, Waker};
 
 /// Specialized [`Future`] used in combination with a scheduler.
 ///
-/// See [`SingleThreadManager::delay`](crate::utils::concurrent::SingleThreadManager::delay).
+/// See [`ExecutorCompletionService::delay`](crate::utils::concurrent::ExecutorCompletionService::delay).
 #[derive(Clone)]
 pub struct DelayedCompletableFuture {
     done: Arc<AtomicBool>,

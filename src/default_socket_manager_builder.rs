@@ -15,13 +15,13 @@
  */
 
 use crate::SocketManager;
-use crate::handle::SocketQueueFactory;
+use crate::handle::DefaultHandler;
 use crate::hooks::ListenerAdapter;
-use crate::utils::concurrent::{ScheduledThreadManager, SingleThreadManager, SingleThreadFactory};
-use crate::hooks::{InterfacedEventManager, EventManager, EventManagerProxy, EventQueue, EventManagerProvider, EventTask};
-use crate::utils::SocketBufferQueue;
+use crate::utils::concurrent::ScheduledThreadPoolExecutor;
+use crate::utils::{InterfacedEventManager, EventManager, EventQueue, EventManagerProvider, EventManagerProxy};
+use crate::requests::BufferedSink;
+use crate::utils::Buffer;
 use crate::utils::config::{SocketConfig, ThreadingConfig};
-use bytes::BytesMut;
 use std::any::Any;
 use std::cell::RefCell;
 use std::io;
@@ -29,12 +29,12 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-type PipelineFactory<P> = Arc<dyn Fn(&SocketManager, &Rc<RefCell<SocketBufferQueue>>, &EventQueue<BytesMut>) -> P + Send + Sync>;
+type PipelineFactory<P> = Arc<dyn Fn(&SocketManager, &Rc<RefCell<Buffer>>, &EventQueue) -> P + Send + Sync>;
 
 /// Used to create new instances of [`SocketManager`].
-pub struct DefaultSocketManagerBuilder<P = Rc<EventManagerProxy>> {
-    socket_pool: Option<ScheduledThreadManager<SingleThreadManager>>,
-    worker_pool: Option<ScheduledThreadManager<SingleThreadManager>>,
+pub struct DefaultSocketManagerBuilder<P = Rc<BufferedSink>> {
+    socket_pool: Option<ScheduledThreadPoolExecutor>,
+    worker_pool: Option<ScheduledThreadPoolExecutor>,
     factory: PipelineFactory<P>,
     listeners: usize,
     backlog: i32,
@@ -64,7 +64,7 @@ impl DefaultSocketManagerBuilder {
         Self {
             socket_pool: None,
             worker_pool: None,
-            factory: Arc::new(EventManagerProxy::new),
+            factory: Arc::new(BufferedSink::new),
             listeners: 0,
             backlog: 200,
             concurrency: 32,
@@ -270,7 +270,7 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
     /// Default: the [`socket_pool`](Self::set_socket_pool)
     pub fn set_worker_pool(
         mut self,
-        worker_pool: ScheduledThreadManager<SingleThreadManager>,
+        worker_pool: ScheduledThreadPoolExecutor,
     ) -> Self {
         self.worker_pool = Some(worker_pool);
         self
@@ -278,12 +278,12 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
 
     /// Sets the pool used for the sockets bound by [`SocketManager::bind`].
     ///
-    /// Default: Shared [`ScheduledThreadManager`] with (`2 *` [`available_parallelism`]) shards.
+    /// Default: Shared [`ScheduledThreadPoolExecutor`] with (`2 *` [`available_parallelism`]) shards.
     ///
     /// [`available_parallelism`]: std::thread::available_parallelism
     pub fn set_socket_pool(
         mut self,
-        socket_pool: ScheduledThreadManager<SingleThreadManager>,
+        socket_pool: ScheduledThreadPoolExecutor,
     ) -> Self {
         self.socket_pool = Some(socket_pool);
         self
@@ -352,11 +352,11 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
         }
         let factory = self.factory;
         let provider: EventManagerProvider = Arc::new(move |socket_manager, buffer, inbound| {
-            Rc::new(RefCell::new(factory(socket_manager, buffer, inbound))) as Rc<dyn EventTask>
+            Rc::new(RefCell::new(factory(socket_manager, buffer, inbound))) as Rc<dyn EventManagerProxy>
         });
         let socket_pool = match self.socket_pool {
             Some(socket_pool) => socket_pool,
-            None => ScheduledThreadManager::new(0, SingleThreadFactory::new(64, SocketQueueFactory::default()))?,
+            None => ScheduledThreadPoolExecutor::new(0, 64, DefaultHandler::new_factory())?,
         };
         let worker_pool = self.worker_pool.unwrap_or_else(|| socket_pool.clone());
         let threading_config = ThreadingConfig::new(
