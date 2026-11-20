@@ -190,6 +190,11 @@ impl ScheduledExecutorService {
         self.queue.stop_keep_alive(key);
     }
 
+    pub(crate) fn close_after(&mut self, delay: Duration) {
+        let key = self.socket_id;
+        self.schedule(delay, move |manager| manager.handle_event(key, |_, _| false));
+    }
+
     pub(crate) fn deadline(&mut self, delay: Duration) {
         let key = self.socket_id;
         self.schedule(delay, move |manager| manager.queue.cancel(key));

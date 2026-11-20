@@ -107,7 +107,9 @@ impl<M> DelayedWorkQueue<M> {
     }
 
     pub(crate) fn schedule(&mut self, delay: Duration, task: Box<dyn FnOnce(&mut M) + Send>) -> (Instant, usize) {
-        let worker_handle = (Instant::now() + delay, self.sequence);
+        let now = Instant::now();
+        let deadline = now.checked_add(delay).unwrap_or_else(|| now + Duration::from_secs(u32::MAX.into()));
+        let worker_handle = (deadline, self.sequence);
         self.scheduled_tasks.insert(worker_handle, task);
         self.sequence += 1;
         worker_handle
@@ -283,6 +285,14 @@ mod tests {
             task_id,
             sender: sender.clone(),
         }))
+    }
+
+    #[test]
+    fn overflow() {
+        let mut queue = DelayedWorkQueue::<Vec<u32>>::new();
+        queue.schedule(Duration::MAX, Box::new(|order| order.push(1)));
+        assert_eq!(queue.timeout(), u32::MAX - 1);
+        assert!(queue.next(Instant::now()).is_none());
     }
 
     #[test]

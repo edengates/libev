@@ -29,6 +29,7 @@ use std::mem;
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::os::fd::{AsFd, BorrowedFd};
 use std::rc::Rc;
+use std::time::Duration;
 
 pub struct SocketChannel {
     socket: TcpStream,
@@ -37,11 +38,14 @@ pub struct SocketChannel {
     sending: usize,
     packet: Vec<BytesMut>,
     flags: u32,
+    closing: bool,
 }
 
 impl Drop for SocketChannel {
     fn drop(&mut self) {
-        self.socket.shutdown(Shutdown::Write).ok();
+        if self.channel.socket_manager().close_timeout() != Some(Duration::ZERO) {
+            self.socket.shutdown(Shutdown::Write).ok();
+        }
     }
 }
 
@@ -57,6 +61,7 @@ impl SocketChannel {
             sending: 0,
             packet: Vec::new(),
             flags: 0,
+            closing: false,
         }
     }
 
@@ -199,6 +204,10 @@ impl Channel for SocketChannel {
             self.enable_flag(manager, READABLE)?;
         } else {
             self.disable_flag(manager, READABLE)?;
+        }
+        if !is_open && !self.packet.is_empty() && !self.closing {
+            self.closing = true;
+            manager.close_after(self.channel.socket_manager().shutdown_timeout());
         }
         Ok(is_open || !self.packet.is_empty())
     }

@@ -160,8 +160,8 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
         self
     }
 
-    /// Sets how long [`SocketManager::shutdown`] waits for open connections before it closes them and shuts down the
-    /// pools.
+    /// Sets how long [`SocketManager::shutdown`] and a closed channel wait for pending messages before the connections
+    /// are closed and the pools are shut down.
     ///
     /// Default: `15` seconds
     pub fn set_shutdown_timeout(mut self, shutdown_timeout: Duration) -> Self {

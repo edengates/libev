@@ -615,6 +615,43 @@ mod tests {
     }
 
     #[test]
+    fn race() {
+        let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::new(|| "Test", "Loop"));
+        let executor = executor(&manager);
+        let (sender, receiver) = mpsc::channel();
+        thread::scope(|scope| {
+            for _ in 0..4 {
+                let sender = sender.clone();
+                let executor = &executor;
+                scope.spawn(move || {
+                    for _ in 0..1000 {
+                        let sender = sender.clone();
+                        executor.execute(move || sender.send(()).unwrap()).unwrap();
+                    }
+                });
+            }
+        });
+
+        for _ in 0..4000 {
+            receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+    }
+
+    #[test]
+    fn reject() {
+        let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::new(|| "Test", "Loop"));
+        let executor = executor(&manager);
+        executor.shutdown(Duration::ZERO);
+        assert!(executor.await_shutdown(Duration::from_secs(5)));
+
+        let listener = listener();
+        let address = listener.local_addr().unwrap();
+        let data = executor.register(move || Box::new(ServerSocketChannelAdapter { listener }));
+        assert!(data.recv().map_or(true, |data| data.is_err()));
+        assert!(TcpStream::connect_timeout(&address, Duration::from_secs(1)).is_err());
+    }
+
+    #[test]
     fn close() {
         let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::new(|| "Test", "Loop"));
         let executor = executor(&manager);

@@ -1,6 +1,6 @@
 [package]
 name = "libev"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "A Rust I/O library for the event-driven asynchronous network applications"
 license = "Apache-2.0"

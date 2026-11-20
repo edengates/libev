@@ -21,7 +21,9 @@ use libev::hooks::ListenerAdapter;
 use libev::requests::sockactions::SocketAction;
 use libev::utils::concurrent::ScheduledThreadPoolExecutor;
 use std::io::{self, Read, Write};
-use std::net::{Shutdown, TcpStream};
+use std::mem;
+use std::net::{Shutdown, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -310,8 +312,230 @@ impl ListenerAdapter for MessageBulkAdapter {
     }
 }
 
+struct MessageHistoryAdapter {
+    payload: Arc<Vec<u8>>,
+    received: Vec<u8>,
+    callback: Sender<Vec<u8>>,
+}
+
+impl ListenerAdapter for MessageHistoryAdapter {
+    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+        for chunk in chunks(&self.payload, 64 * 1024) {
+            channel.send_message(chunk).queue(|_| (), |_| ())?;
+        }
+        Ok(())
+    }
+
+    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+        self.received.extend_from_slice(&message);
+        if self.received.len() >= self.payload.len() {
+            self.callback.send(mem::take(&mut self.received)).ok();
+            channel.close();
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct MessageForwardSlowmodeAdapter;
+
+impl ListenerAdapter for MessageForwardSlowmodeAdapter {
+    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+        channel.send_message(message).queue(|_| (), |_| ())
+    }
+
+    async fn on_channel_update_slowmode(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+        channel.set_self_deafened(channel.is_locked());
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct SelfDeafenUpdateAdapter;
+
+impl ListenerAdapter for SelfDeafenUpdateAdapter {
+    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+        channel.set_self_deafened(true);
+        channel.send_message(message).await?;
+        channel.socket_manager().worker_pool().provide().delay(Duration::from_millis(50))?.await;
+        channel.set_self_deafened(false);
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct ChannelDeleteAdapter {
+    length: usize,
+}
+
+impl ListenerAdapter for ChannelDeleteAdapter {
+    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+        channel.send_message(BytesMut::from(&payload(self.length, 0)[..])).queue(|_| (), |_| ())?;
+        Ok(channel.close())
+    }
+}
+
+#[derive(Clone)]
+struct MessageReceiveAdapter {
+    received: Vec<u8>,
+    callback: Sender<Vec<u8>>,
+}
+
+impl ListenerAdapter for MessageReceiveAdapter {
+    async fn on_message_received(&mut self, _channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+        self.received.extend_from_slice(&message);
+        Ok(())
+    }
+
+    async fn on_channel_disconnect(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+        self.callback.send(mem::take(&mut self.received)).ok();
+        channel.on_channel_disconnect();
+        Ok(())
+    }
+}
+
+struct SessionResumeAdapter {
+    received: Vec<u8>,
+    paused: bool,
+    callback: Sender<Vec<u8>>,
+}
+
+impl ListenerAdapter for SessionResumeAdapter {
+    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+        self.received.extend_from_slice(&message);
+        if !self.paused && self.received.len() >= 128 * 1024 {
+            self.paused = true;
+            channel.set_self_deafened(true);
+            channel.socket_manager().worker_pool().provide().delay(Duration::from_millis(750))?.await;
+            channel.set_self_deafened(false);
+        }
+        Ok(())
+    }
+
+    async fn on_channel_disconnect(&mut self, _channel: &mut MessageChannel) -> io::Result<()> {
+        self.callback.send(mem::take(&mut self.received)).ok();
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct ChannelCloseAdapter;
+
+impl ListenerAdapter for ChannelCloseAdapter {
+    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+        channel.close();
+        Ok(channel.close())
+    }
+}
+
+#[derive(Clone)]
+struct MessageBulkSendAdapter;
+
+impl ListenerAdapter for MessageBulkSendAdapter {
+    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+        channel.send_message(BytesMut::zeroed(4 * 1024 * 1024)).queue(|_| (), |_| ())?;
+        Ok(channel.close())
+    }
+}
+
+struct MessageBulkWriteAdapter {
+    payload: Vec<u8>,
+}
+
+impl ListenerAdapter for MessageBulkWriteAdapter {
+    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+        for chunk in chunks(&self.payload, 8 * 1024) {
+            channel.write(chunk)?;
+        }
+        channel.flush();
+        Ok(())
+    }
+}
+
+struct MessagePayloadAdapter {
+    received: Vec<u8>,
+    callback: Sender<Vec<u8>>,
+}
+
+impl ListenerAdapter for MessagePayloadAdapter {
+    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+        channel.send_message(BytesMut::from(&b"payload"[..])).queue(|_| (), |_| ())?;
+        channel.on_ready();
+        Ok(())
+    }
+
+    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+        self.received.extend_from_slice(&message);
+        if self.received.len() >= b"payload".len() {
+            self.callback.send(mem::take(&mut self.received)).ok();
+            channel.close();
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+#[derive(Clone)]
+struct GuildReadyAdapter {
+    id: usize,
+    callback: Sender<usize>,
+}
+
+#[cfg(unix)]
+impl ListenerAdapter for GuildReadyAdapter {
+    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+        self.callback.send(self.id).ok();
+        Ok(channel.close())
+    }
+}
+
 fn shard_manager(shards_total: usize) -> ScheduledThreadPoolExecutor {
     ScheduledThreadPoolExecutor::new(shards_total, 64).unwrap()
+}
+
+fn payload(length: usize, seed: usize) -> Vec<u8> {
+    (0..length).map(|index| ((index * 31 + seed) % 251) as u8).collect()
+}
+
+fn chunks(payload: &[u8], limit: usize) -> Vec<BytesMut> {
+    let mut chunks = Vec::new();
+    let mut offset = 0;
+    while offset < payload.len() {
+        let length = (1 + (chunks.len() * 7919) % limit).min(payload.len() - offset);
+        chunks.push(BytesMut::from(&payload[offset..offset + length]));
+        offset += length;
+    }
+    chunks
+}
+
+fn gathering(length: usize, connections: usize) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let seed = AtomicUsize::new(0);
+    let manager = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .set_worker_pool(shard_manager(1))
+        .add_event_listener_provider(move || MessageBulkWriteAdapter {
+            payload: payload(length, seed.fetch_add(1, Ordering::Relaxed)),
+        })
+        .build()
+        .unwrap();
+    for _ in 0..connections {
+        manager.connect(address).unwrap();
+    }
+
+    let mut seeds = Vec::new();
+    for _ in 0..connections {
+        let (mut server, _) = listener.accept().unwrap();
+        server.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+        let mut received = vec![0; length];
+        server.read_exact(&mut received).unwrap();
+        let seed = received[0] as usize;
+        assert_eq!(received, payload(length, seed));
+        seeds.push(seed);
+    }
+    seeds.sort();
+    assert_eq!(seeds, (0..connections).collect::<Vec<_>>());
 }
 
 #[test]
@@ -849,4 +1073,358 @@ fn lock() {
         client.read_exact(&mut received).unwrap();
         assert_eq!(&received, b"pingping");
     }
+}
+
+#[test]
+fn bulk() {
+    let server = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .add_event_listener(MessageForwardHandler)
+        .build()
+        .unwrap();
+    let address = server.bind("127.0.0.1:0").unwrap();
+
+    let data = Arc::new(payload(1024 * 1024, 0));
+    let (sender, receiver) = mpsc::channel();
+    let manager = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .add_event_listener_provider({
+            let data = Arc::clone(&data);
+            move || MessageHistoryAdapter {
+                payload: Arc::clone(&data),
+                received: Vec::new(),
+                callback: sender.clone(),
+            }
+        })
+        .build()
+        .unwrap();
+    manager.connect(address).unwrap();
+
+    assert_eq!(receiver.recv_timeout(Duration::from_secs(10)).unwrap(), *data);
+}
+
+#[test]
+fn backpressure() {
+    let server = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .set_threshold(16 * 1024)
+        .set_large_threshold(64 * 1024)
+        .add_event_listener(MessageForwardSlowmodeAdapter)
+        .build()
+        .unwrap();
+    let address = server.bind("127.0.0.1:0").unwrap();
+
+    let data = Arc::new(payload(1024 * 1024, 1));
+    let (sender, receiver) = mpsc::channel();
+    let manager = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .add_event_listener_provider({
+            let data = Arc::clone(&data);
+            move || MessageHistoryAdapter {
+                payload: Arc::clone(&data),
+                received: Vec::new(),
+                callback: sender.clone(),
+            }
+        })
+        .build()
+        .unwrap();
+    manager.connect(address).unwrap();
+
+    assert_eq!(receiver.recv_timeout(Duration::from_secs(10)).unwrap(), *data);
+}
+
+#[test]
+fn toggle() {
+    let server = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .add_event_listener(SelfDeafenUpdateAdapter)
+        .build()
+        .unwrap();
+    let address = server.bind("127.0.0.1:0").unwrap();
+
+    let mut client = TcpStream::connect(address).unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    for message in [b"1", b"2"] {
+        client.write_all(message).unwrap();
+        let mut received = [0; 1];
+        client.read_exact(&mut received).unwrap();
+        assert_eq!(&received, message);
+    }
+}
+
+#[test]
+fn drain() {
+    let server = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .add_event_listener(ChannelDeleteAdapter { length: 16 * 1024 })
+        .build()
+        .unwrap();
+    let address = server.bind("127.0.0.1:0").unwrap();
+
+    let (sender, receiver) = mpsc::channel();
+    let manager = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .set_buffer_size(10)
+        .set_chunk_limit(1)
+        .add_event_listener(MessageReceiveAdapter { received: Vec::new(), callback: sender })
+        .build()
+        .unwrap();
+    manager.connect(address).unwrap();
+
+    assert_eq!(receiver.recv_timeout(Duration::from_secs(5)).unwrap(), payload(16 * 1024, 0));
+}
+
+#[test]
+fn eof() {
+    let (sender, receiver) = mpsc::channel();
+    let server = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .set_buffer_size(10)
+        .set_chunk_limit(1)
+        .add_event_listener(MessageReceiveAdapter { received: Vec::new(), callback: sender })
+        .build()
+        .unwrap();
+    let address = server.bind("127.0.0.1:0").unwrap();
+
+    let mut client = TcpStream::connect(address).unwrap();
+    client.write_all(&payload(100, 2)).unwrap();
+    drop(client);
+
+    assert_eq!(receiver.recv_timeout(Duration::from_secs(5)).unwrap(), payload(100, 2));
+}
+
+#[test]
+fn paused() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let data = payload(32 * 1024 * 1024, 3);
+    let server = thread::spawn({
+        let data = data.clone();
+        move || {
+            let (mut server, _) = listener.accept().unwrap();
+            for chunk in data.chunks(8 * 1024) {
+                server.write_all(chunk).unwrap();
+            }
+            server.shutdown(Shutdown::Write).unwrap();
+            server.read_to_end(&mut Vec::new()).ok();
+        }
+    });
+
+    let (sender, receiver) = mpsc::channel();
+    let manager = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .add_event_listener_provider(move || SessionResumeAdapter {
+            received: Vec::new(),
+            paused: false,
+            callback: sender.clone(),
+        })
+        .build()
+        .unwrap();
+    manager.connect(address).unwrap();
+
+    assert_eq!(receiver.recv_timeout(Duration::from_secs(30)).unwrap(), data);
+    server.join().unwrap();
+}
+
+#[test]
+fn close_ready() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let (sender, receiver) = mpsc::channel();
+    let manager = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .add_event_listener(ChannelDisconnectAdapter { callback: sender })
+        .add_event_listener(SessionInvalidateAdapter)
+        .build()
+        .unwrap();
+    manager.connect(listener.local_addr().unwrap()).unwrap();
+
+    let event = || receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(event());
+    assert!(!event());
+    assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
+}
+
+#[test]
+fn close_twice() {
+    let (sender, receiver) = mpsc::channel();
+    let server = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .add_event_listener(ChannelDisconnectAdapter { callback: sender })
+        .add_event_listener(ChannelCloseAdapter)
+        .build()
+        .unwrap();
+    let address = server.bind("127.0.0.1:0").unwrap();
+
+    let mut client = TcpStream::connect(address).unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    assert_eq!(client.read(&mut [0; 1]).unwrap(), 0);
+    let event = || receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(event());
+    assert!(!event());
+    assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
+}
+
+#[test]
+fn close_pending() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let (sender, receiver) = mpsc::channel();
+    let manager = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .set_shutdown_timeout(Duration::from_millis(100))
+        .add_event_listener(ChannelDisconnectAdapter { callback: sender })
+        .add_event_listener(MessageBulkSendAdapter)
+        .build()
+        .unwrap();
+    manager.connect(listener.local_addr().unwrap()).unwrap();
+
+    let event = || receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(event());
+    assert!(!event());
+    let (mut server, _) = listener.accept().unwrap();
+    server.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    if let Err(error) = server.read_to_end(&mut Vec::new()) {
+        assert!(!matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut));
+    }
+    manager.shutdown();
+    assert!(manager.await_shutdown(Duration::from_secs(5)));
+}
+
+#[test]
+fn refused() {
+    let address = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+    let (sender, receiver) = mpsc::channel();
+    let manager = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .add_event_listener(ChannelDisconnectAdapter { callback: sender })
+        .build()
+        .unwrap();
+    for _ in 0..2 {
+        manager.connect(address).ok();
+        assert!(receiver.recv_timeout(Duration::from_millis(500)).is_err());
+    }
+
+    let server = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .add_event_listener(MessageForwardHandler)
+        .build()
+        .unwrap();
+    manager.connect(server.bind("127.0.0.1:0").unwrap()).unwrap();
+    assert!(receiver.recv_timeout(Duration::from_secs(5)).unwrap());
+}
+
+#[test]
+fn linger() {
+    let server = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .set_close_timeout(Duration::ZERO)
+        .add_event_listener(SessionInvalidateAdapter)
+        .build()
+        .unwrap();
+    let address = server.bind("127.0.0.1:0").unwrap();
+
+    let mut client = TcpStream::connect(address).unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    assert_eq!(client.read(&mut [0; 1]).unwrap_err().kind(), io::ErrorKind::ConnectionReset);
+}
+
+#[test]
+fn gather() {
+    gathering(1024 * 1024, 1);
+}
+
+#[test]
+fn gather_big() {
+    gathering(50 * 1024 * 1024, 1);
+}
+
+#[test]
+fn gather_shared() {
+    gathering(1024 * 1024, 2);
+}
+
+#[test]
+fn churn() {
+    let (events, server_events) = mpsc::channel();
+    let server = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .set_worker_pool(shard_manager(2))
+        .add_event_listener(ChannelDisconnectAdapter { callback: events })
+        .add_event_listener(MessageForwardHandler)
+        .build()
+        .unwrap();
+    let address = server.bind("127.0.0.1:0").unwrap();
+
+    let (sender, receiver) = mpsc::channel();
+    let (events, client_events) = mpsc::channel();
+    let manager = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .set_worker_pool(shard_manager(2))
+        .add_event_listener(ChannelDisconnectAdapter { callback: events })
+        .add_event_listener_provider(move || MessagePayloadAdapter {
+            received: Vec::new(),
+            callback: sender.clone(),
+        })
+        .build()
+        .unwrap();
+    for _ in 0..100 {
+        manager.connect(address).unwrap();
+    }
+
+    for _ in 0..100 {
+        assert_eq!(receiver.recv_timeout(Duration::from_secs(10)).unwrap(), b"payload");
+    }
+    for events in [server_events, client_events] {
+        let ready = (0..200).filter(|_| events.recv_timeout(Duration::from_secs(10)).unwrap()).count();
+        assert_eq!(ready, 100);
+        assert!(events.recv_timeout(Duration::from_millis(100)).is_err());
+    }
+}
+
+#[test]
+fn rebind() {
+    let mut address = "127.0.0.1:0".parse().unwrap();
+    for _ in 0..2 {
+        let server = DefaultSocketManagerBuilder::new()
+            .set_socket_pool(shard_manager(1))
+            .add_event_listener(MessageForwardHandler)
+            .build()
+            .unwrap();
+        address = server.bind(address).unwrap();
+
+        let mut client = TcpStream::connect(address).unwrap();
+        let mut received = [0; 4];
+        client.write_all(b"ping").unwrap();
+        client.read_exact(&mut received).unwrap();
+        assert_eq!(&received, b"ping");
+        drop(client);
+        server.shutdown();
+        assert!(server.await_shutdown(Duration::from_secs(5)));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn shared() {
+    let (sender, receiver) = mpsc::channel();
+    let mut address = "127.0.0.1:0".parse().unwrap();
+    let mut servers = Vec::new();
+    for id in 0..2 {
+        let server = DefaultSocketManagerBuilder::new()
+            .set_socket_pool(shard_manager(1))
+            .set_address_shared(true)
+            .add_event_listener(GuildReadyAdapter { id, callback: sender.clone() })
+            .build()
+            .unwrap();
+        address = server.bind(address).unwrap();
+        servers.push(server);
+    }
+
+    let mut ids = Vec::new();
+    for _ in 0..64 {
+        let mut client = TcpStream::connect(address).unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        assert_eq!(client.read(&mut [0; 1]).unwrap(), 0);
+        ids.push(receiver.recv_timeout(Duration::from_secs(5)).unwrap());
+    }
+    assert!(ids.contains(&0) && ids.contains(&1));
 }

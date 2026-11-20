@@ -25,6 +25,7 @@ use log::debug;
 use std::io;
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::rc::Rc;
+use std::time::Duration;
 
 pub(crate) struct SocketChannelState {
     pub(crate) socket: TcpStream,
@@ -32,6 +33,7 @@ pub(crate) struct SocketChannelState {
     pub(crate) socket_address: Option<SocketAddr>,
     pub(crate) sending: Option<usize>,
     pub(crate) receiving: bool,
+    pub(crate) closing: bool,
 }
 
 impl SocketChannelState {
@@ -42,13 +44,16 @@ impl SocketChannelState {
             socket_address,
             sending: None,
             receiving: false,
+            closing: false,
         }
     }
 }
 
 impl Drop for SocketChannelState {
     fn drop(&mut self) {
-        self.socket.shutdown(Shutdown::Write).ok();
+        if self.channel.socket_manager().close_timeout() != Some(Duration::ZERO) {
+            self.socket.shutdown(Shutdown::Write).ok();
+        }
     }
 }
 
@@ -138,6 +143,10 @@ impl<T: SocketChannelMixin> Channel for T {
         if !self.state().receiving && !channel.is_connected() && is_open && !is_deafened {
             self.do_begin_read(manager)?;
             self.state_mut().receiving = true;
+        }
+        if !is_open && self.state().sending.is_some() && !self.state().closing {
+            self.state_mut().closing = true;
+            manager.close_after(channel.socket_manager().shutdown_timeout());
         }
         Ok(is_open || self.state().sending.is_some())
     }

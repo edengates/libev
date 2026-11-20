@@ -106,7 +106,7 @@ impl SocketManager {
         self.inner.threading_config.large_threshold()
     }
 
-    /// How long [`shutdown`](Self::shutdown) waits for open connections.
+    /// How long [`shutdown`](Self::shutdown) and a closed channel wait for pending messages.
     pub fn shutdown_timeout(&self) -> Duration {
         self.inner.threading_config.shutdown_timeout()
     }
