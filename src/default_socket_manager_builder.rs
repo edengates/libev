@@ -47,6 +47,7 @@ pub struct DefaultSocketManagerBuilder<P = Rc<BufferedSink>> {
     shutdown_timeout: Duration,
     chunk_limit: usize,
     packet_limit: usize,
+    is_power_suppressed_enabled: bool,
     tcp_no_delay: bool,
     close_timeout: Option<Duration>,
     connect_timeout: Duration,
@@ -82,6 +83,7 @@ impl DefaultSocketManagerBuilder {
             shutdown_timeout: Duration::from_secs(15),
             chunk_limit: 16,
             packet_limit: 1024,
+            is_power_suppressed_enabled: false,
             tcp_no_delay: true,
             close_timeout: None,
             connect_timeout: Duration::from_secs(30),
@@ -261,6 +263,18 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
         self
     }
 
+    /// Allows the system to suppress the power of the threads of the [`socket_pool`](Self::set_socket_pool) and the
+    /// [`worker_pool`](Self::set_worker_pool) to save energy.
+    ///
+    /// If `false`, Windows is asked to run these threads at full speed, so they are not moved to the efficiency cores
+    /// and slowed down under load. Other platforms ignore this setting.
+    ///
+    /// Default: `false`
+    pub fn set_power_suppressed_enabled(mut self, enable: bool) -> Self {
+        self.is_power_suppressed_enabled = enable;
+        self
+    }
+
     /// Sets how long the listeners of a closed channel may still handle the remaining events.
     ///
     /// The time starts with the [`ChannelDisconnectEvent`], after it the processing is canceled.
@@ -337,6 +351,7 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
             shutdown_timeout: self.shutdown_timeout,
             chunk_limit: self.chunk_limit,
             packet_limit: self.packet_limit,
+            is_power_suppressed_enabled: self.is_power_suppressed_enabled,
             tcp_no_delay: self.tcp_no_delay,
             close_timeout: self.close_timeout,
             connect_timeout: self.connect_timeout,
@@ -380,7 +395,13 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
             shutdown_timeout: self.shutdown_timeout,
             chunk_limit: self.chunk_limit,
             packet_limit: self.packet_limit,
+            is_power_suppressed_enabled: self.is_power_suppressed_enabled,
         };
+        #[cfg(windows)]
+        for shard in threading_config.socket_pool().shards().iter().chain(threading_config.worker_pool().shards()) {
+            let is_power_suppressed_enabled = threading_config.is_power_suppressed_enabled();
+            shard.execute(move || crate::handle::set_power_suppressed(is_power_suppressed_enabled))?;
+        }
         let socket_config = SocketConfig {
             tcp_no_delay: self.tcp_no_delay,
             close_timeout: self.close_timeout,

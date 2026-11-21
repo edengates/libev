@@ -121,6 +121,11 @@ impl SocketManager {
         self.inner.threading_config.packet_limit()
     }
 
+    /// Whether the system may suppress the power of the pool threads to save energy.
+    pub fn is_power_suppressed_enabled(&self) -> bool {
+        self.inner.threading_config.is_power_suppressed_enabled()
+    }
+
     /// Gets the value of the `TCP_NODELAY` option used for each connection.
     pub fn tcp_no_delay(&self) -> bool {
         self.inner.socket_config.tcp_no_delay()
