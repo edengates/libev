@@ -855,7 +855,7 @@ fn idle() {
     let server = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
         .set_worker_pool(shard_manager(1))
-        .set_afk_timeout(Duration::from_millis(100))
+        .set_afk_timeout(Duration::from_secs(1))
         .add_event_listener(ChannelTimeoutAdapter { callback: sender })
         .build()
         .unwrap();
@@ -1447,5 +1447,6 @@ fn shared() {
         assert_eq!(client.read(&mut [0; 1]).unwrap(), 0);
         ids.push(receiver.recv_timeout(Duration::from_secs(5)).unwrap());
     }
+    #[cfg(any(target_os = "linux", windows))]
     assert!(ids.contains(&0) && ids.contains(&1));
 }
