@@ -16,6 +16,7 @@
 
 use crate::requests::sockactions::operator::{
     CombineObjectAction, FlatMapErrorObjectAction, FlatMapObjectAction, MapErrorObjectAction, MapObjectAction,
+    ZipObjectAction,
 };
 use std::future::{self, Future};
 use std::io;
@@ -262,5 +263,36 @@ pub trait SocketAction<T>: Sized {
         B: SocketAction<U>,
     {
         CombineObjectAction::new(self, other)
+    }
+
+    /// Accumulates this [`SocketAction`] with the provided actions into a [`Vec`].
+    ///
+    /// If one of the actions fails, the accumulated action fails with its error.
+    ///
+    /// The `other` actions are the actions to accumulate into the list, they must have the same result type `T`.
+    /// Returns a combined [`SocketAction`] with the results in the order of the actions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use bytes::BytesMut;
+    /// # use libev::entities::channel::middleman::MessageChannel;
+    /// # use libev::requests::sockactions::SocketAction;
+    /// fn send_message<'a>(
+    ///     channel: &'a mut MessageChannel,
+    ///     first: &'a mut MessageChannel,
+    ///     second: &'a mut MessageChannel,
+    ///     message: BytesMut,
+    /// ) -> impl SocketAction<Vec<()>> + 'a {
+    ///     channel.send_message(message.clone()) // SocketAction<()>
+    ///         .zip([first.send_message(message.clone()), second.send_message(message)]) // SocketAction<Vec<()>>
+    /// }
+    /// ```
+    fn zip<I>(self, other: I) -> ZipObjectAction<Self, I::IntoIter>
+    where
+        I: IntoIterator,
+        I::Item: SocketAction<T>,
+    {
+        ZipObjectAction::new(self, other.into_iter())
     }
 }
