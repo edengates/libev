@@ -15,6 +15,7 @@
  */
 
 use std::cell::Cell;
+use std::io;
 use std::rc::Rc;
 
 mod combine_object_action;
@@ -27,6 +28,8 @@ mod map_error_object_action;
 pub use map_error_object_action::MapErrorObjectAction;
 mod map_object_action;
 pub use map_object_action::MapObjectAction;
+mod zip_object_action;
+pub use zip_object_action::ZipObjectAction;
 
 pub(crate) fn catcher<V, C: FnOnce(V)>(callback: &Rc<Cell<Option<C>>>) -> impl FnOnce(V) + use<V, C> {
     let callback = Rc::clone(callback);
@@ -34,5 +37,17 @@ pub(crate) fn catcher<V, C: FnOnce(V)>(callback: &Rc<Cell<Option<C>>>) -> impl F
         if let Some(callback) = callback.take() {
             callback(value);
         }
+    }
+}
+
+pub(crate) fn fail<S, F: FnOnce(io::Error)>(
+    success: &Rc<Cell<Option<S>>>,
+    failure: &Rc<Cell<Option<F>>>,
+) -> impl FnOnce(io::Error) + use<S, F> {
+    let success = Rc::clone(success);
+    let failure = catcher(failure);
+    move |error| {
+        success.take();
+        failure(error);
     }
 }

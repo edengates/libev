@@ -15,7 +15,7 @@
  */
 
 use crate::requests::sockactions::SocketAction;
-use crate::requests::sockactions::operator::catcher;
+use crate::requests::sockactions::operator::{catcher, fail};
 use std::cell::Cell;
 use std::io;
 use std::marker::PhantomData;
@@ -75,18 +75,6 @@ fn done<V, S: FnOnce(())>(count: &Rc<Cell<u8>>, success: &Rc<Cell<Option<S>>>) -
         if count.get() == 2 {
             success(());
         }
-    }
-}
-
-fn fail<S, F: FnOnce(io::Error)>(
-    success: &Rc<Cell<Option<S>>>,
-    failure: &Rc<Cell<Option<F>>>,
-) -> impl FnOnce(io::Error) + use<S, F> {
-    let success = Rc::clone(success);
-    let failure = catcher(failure);
-    move |error| {
-        success.take();
-        failure(error);
     }
 }
 
