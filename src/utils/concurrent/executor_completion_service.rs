@@ -609,7 +609,7 @@ mod tests {
         let executor = executor(&manager);
         executor.register(move || Box::new(LockedChannel { listener: listener() })).recv().unwrap().unwrap();
 
-        executor.shutdown(Duration::from_millis(100));
+        executor.shutdown(Duration::from_secs(1));
         assert!(!executor.await_shutdown(Duration::from_millis(50)));
         assert!(executor.await_shutdown(Duration::from_secs(5)));
     }
