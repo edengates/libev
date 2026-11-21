@@ -122,10 +122,8 @@ impl ExecutorCompletionService {
         F: FnOnce() -> Box<dyn Channel> + Send + 'static,
     {
         let (sender, receiver) = mpsc::channel();
-        let callback = sender.clone();
-        let task: Task = Box::new(move |manager: &mut ScheduledExecutorService| {
-            callback.send(manager.register(handler())).ok();
-        });
+        let request = Registration { handler, callback: sender.clone() };
+        let task: Task = Box::new(move |manager: &mut ScheduledExecutorService| request.run(manager));
         if let Err(error) = self.submit(task) {
             sender.send(Err(error)).ok();
         }
@@ -162,6 +160,17 @@ impl ExecutorCompletionService {
 impl Drop for ExecutorCompletionService {
     fn drop(&mut self) {
         self.shutdown_now().ok();
+    }
+}
+
+struct Registration<F> {
+    handler: F,
+    callback: Sender<io::Result<()>>,
+}
+
+impl<F: FnOnce() -> Box<dyn Channel>> Registration<F> {
+    fn run(self, manager: &mut ScheduledExecutorService) {
+        self.callback.send(manager.register((self.handler)())).ok();
     }
 }
 
