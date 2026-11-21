@@ -1343,9 +1343,11 @@ fn linger() {
         .unwrap();
     let address = server.bind("127.0.0.1:0").unwrap();
 
-    let mut client = TcpStream::connect(address).unwrap();
-    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    assert_eq!(client.read(&mut [0; 1]).unwrap_err().kind(), io::ErrorKind::ConnectionReset);
+    let data = TcpStream::connect(address).and_then(|mut client| {
+        client.set_read_timeout(Some(Duration::from_secs(5)))?;
+        client.read(&mut [0; 1])
+    });
+    assert_eq!(data.unwrap_err().kind(), io::ErrorKind::ConnectionReset);
 }
 
 #[test]
