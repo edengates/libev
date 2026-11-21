@@ -15,6 +15,7 @@
  */
 
 use crate::SocketManager;
+use crate::handle::socket;
 use crate::hooks::ListenerAdapter;
 use crate::utils::concurrent::ScheduledThreadPoolExecutor;
 use crate::utils::{InterfacedEventManager, EventManager, EventQueue, EventManagerProvider, EventManagerProxy};
@@ -71,7 +72,7 @@ impl DefaultSocketManagerBuilder {
             worker_pool: None,
             factory: Arc::new(BufferedSink::new),
             listeners: 0,
-            backlog: 200,
+            backlog: socket::somaxconn(),
             concurrency: 32,
             buffer_size: 4096,
             reconnect_delay: Duration::from_secs(2),
@@ -97,7 +98,8 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
     ///
     /// This is the maximum length of the queue of incoming connections that are not accepted yet.
     ///
-    /// Default: `200`
+    /// Default: the `SOMAXCONN` value of the current machine, `net.core.somaxconn` on Linux, `kern.ipc.somaxconn` on
+    /// macOS, `kern.ipc.soacceptqueue` on FreeBSD and the value chosen by the service provider on Windows.
     pub fn set_backlog(mut self, backlog: i32) -> Self {
         self.backlog = backlog;
         self

@@ -28,6 +28,10 @@ use windows_sys::Win32::Networking::WinSock::{
     WSAGetLastError, setsockopt,
 };
 
+pub(crate) fn somaxconn() -> i32 {
+    0x7fffffff
+}
+
 pub(crate) fn listener(
     address: &SocketAddr,
     backlog: i32,
