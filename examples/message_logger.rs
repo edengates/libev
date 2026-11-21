@@ -62,7 +62,7 @@ fn main() -> io::Result<()> {
 
     // Here you can now start using the socket manager,
     // bind(...) starts accepting connections on the address and returns the address it is bound to
-    println!("Logged in with address: {}", manager.bind(address)?);
+    println!("Listening on address: {}", manager.bind(address)?);
 
     // The connections are handled on the thread pools, so the main thread can wait here until Enter is pressed
     io::stdin().read_line(&mut String::new())?;

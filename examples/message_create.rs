@@ -32,10 +32,10 @@ impl ListenerAdapter for MessageCreateExample {
     // It gets called once the connection to the address is established
     async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
         // send_message(...) creates a MessageCreateAction, nothing is sent until you queue it
-        // queue(...) sends the message in the background and calls one of the callbacks once it is done
+        // queue(...) adds the message to the channel buffer and calls one of the callbacks with the result
         channel.send_message(BytesMut::from(self.content.as_bytes())).queue(
-            |_| println!("[sent] {}", self.content),
-            |error| println!("The message could not be sent: {}", error),
+            |_| println!("[queued] {}", self.content),
+            |error| eprintln!("The message could not be sent: {}", error),
         )
     }
 

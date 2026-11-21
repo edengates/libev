@@ -72,7 +72,7 @@ fn main() -> io::Result<()> {
         .build()?;
 
     // bind(...) starts accepting connections on the address and returns the address it is bound to
-    println!("Listening on {}", manager.bind("127.0.0.1:8080")?);
+    println!("Listening on address: {}", manager.bind("127.0.0.1:8080")?);
 
     // The connections are handled on the thread pools, so the main thread can wait here until Enter is pressed
     io::stdin().read_line(&mut String::new())?;
@@ -102,8 +102,8 @@ impl ListenerAdapter for MessageCreateExample {
     async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
         // send_message(...) creates a MessageCreateAction, nothing is sent until you queue it
         channel.send_message(BytesMut::from(&b"ping"[..])).queue(
-            |_| println!("[sent] ping"),
-            |error| println!("The message could not be sent: {}", error),
+            |_| println!("[queued] ping"),
+            |error| eprintln!("The message could not be sent: {}", error),
         )
     }
 
