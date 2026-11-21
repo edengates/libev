@@ -73,6 +73,7 @@ impl Buffer {
         }
     }
 
+    #[cfg(unix)]
     pub fn reuse(&mut self, mut packet: Vec<BytesMut>) {
         if self.queued.capacity() == 0 {
             packet.clear();

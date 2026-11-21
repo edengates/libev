@@ -669,6 +669,18 @@ fn is_locked() {
 }
 
 #[test]
+fn await_shutdown() {
+    let manager = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .set_worker_pool(shard_manager(1))
+        .add_event_listener(MessageReceivedAdapter)
+        .build()
+        .unwrap();
+    manager.shutdown();
+    assert!(manager.await_shutdown(Duration::MAX));
+}
+
+#[test]
 fn shutdown() {
     let (sender, receiver) = mpsc::channel();
     let server = DefaultSocketManagerBuilder::new()

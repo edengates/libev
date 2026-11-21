@@ -120,12 +120,12 @@ impl ThreadingConfig {
     }
 
     pub fn await_shutdown(&self, timeout: Duration) -> bool {
-        let deadline = Instant::now() + timeout;
+        let deadline = Instant::now().checked_add(timeout);
         self.socket_pool
             .shards()
             .iter()
             .chain(self.worker_pool.shards())
-            .all(|shard| shard.await_shutdown(deadline.saturating_duration_since(Instant::now())))
+            .all(|shard| shard.await_shutdown(deadline.map_or(timeout, |deadline| deadline.saturating_duration_since(Instant::now()))))
     }
 
     pub fn shutdown_now(&self) -> io::Result<()> {

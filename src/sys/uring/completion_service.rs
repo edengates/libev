@@ -51,8 +51,10 @@ impl CompletionService {
     }
 
     pub(crate) fn new(entries: u32) -> io::Result<Self> {
+        let ring = IoUring::new(entries)?;
+        probe(&ring.submitter())?;
         Ok(Self {
-            ring: IoUring::new(entries)?,
+            ring,
             event_fd: eventfd(0, EventfdFlags::CLOEXEC)?,
             event_value: Box::new(UnsafeCell::new(0)),
             is_reading: AtomicBool::new(false),
@@ -158,6 +160,25 @@ impl Drop for CompletionService {
             }
         }
     }
+}
+
+fn probe(submitter: &Submitter<'_>) -> io::Result<()> {
+    let layout = Layout::from_size_align(mem::size_of::<BufRingEntry>(), 4096).map_err(|_| io::ErrorKind::InvalidInput)?;
+    let ring = unsafe { alloc::alloc_zeroed(layout) };
+    if ring.is_null() {
+        return Err(io::ErrorKind::OutOfMemory.into());
+    }
+    if let Err(error) = unsafe { submitter.register_buf_ring_with_flags(ring as u64, 1, 0, 0) } {
+        unsafe { alloc::dealloc(ring, layout) };
+        return Err(match error.kind() {
+            io::ErrorKind::InvalidInput => io::ErrorKind::Unsupported.into(),
+            _ => error,
+        });
+    }
+    if submitter.unregister_buf_ring(0).is_ok() {
+        unsafe { alloc::dealloc(ring, layout) };
+    }
+    Ok(())
 }
 
 pub struct BufferRing {
