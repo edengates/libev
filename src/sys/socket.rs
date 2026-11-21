@@ -34,6 +34,28 @@ fn new_socket(domain: Domain) -> io::Result<Socket> {
     Socket::new(domain, Type::STREAM.nonblocking(), None)
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn somaxconn() -> i32 {
+    std::fs::read_to_string("/proc/sys/net/core/somaxconn")
+        .ok()
+        .and_then(|data| data.trim().parse().ok())
+        .unwrap_or(4096)
+}
+
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
+pub(crate) fn somaxconn() -> i32 {
+    #[cfg(target_os = "macos")]
+    let name = c"kern.ipc.somaxconn";
+    #[cfg(target_os = "freebsd")]
+    let name = c"kern.ipc.soacceptqueue";
+    let mut somaxconn: libc::c_int = 0;
+    let mut length = std::mem::size_of::<libc::c_int>();
+    let data = unsafe {
+        libc::sysctlbyname(name.as_ptr(), (&raw mut somaxconn).cast(), &mut length, std::ptr::null_mut(), 0)
+    };
+    if data == 0 { somaxconn } else { 128 }
+}
+
 pub(crate) fn listener(
     address: &SocketAddr,
     backlog: i32,

@@ -60,6 +60,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "io-uring",
+ "libc",
  "log",
  "rustc-hash",
  "rustix",
