@@ -20,9 +20,10 @@ use libev::entities::channel::middleman::MessageChannel;
 use libev::hooks::ListenerAdapter;
 use libev::requests::sockactions::SocketAction;
 use libev::utils::concurrent::ScheduledThreadPoolExecutor;
+use socket2::{Domain, Socket, Type};
 use std::io::{self, Read, Write};
 use std::mem;
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Barrier};
@@ -1312,7 +1313,9 @@ fn close_pending() {
 
 #[test]
 fn refused() {
-    let address = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+    let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+    socket.bind(&SocketAddr::from(([127, 0, 0, 1], 0)).into()).unwrap();
+    let address = socket.local_addr().unwrap().as_socket().unwrap();
     let (sender, receiver) = mpsc::channel();
     let manager = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
