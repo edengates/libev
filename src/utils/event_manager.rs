@@ -51,6 +51,7 @@ pub trait EventManagerProxy {
 }
 
 impl<P: EventManager> EventManagerProxy for RefCell<P> {
+    #[allow(clippy::await_holding_refcell_ref)]
     fn handle(self: Rc<Self>, channel: Rc<MessageChannelMixin>) -> LocalBoxFuture<'static, ()> {
         Box::pin(async move {
             let mut data = Ok(true);

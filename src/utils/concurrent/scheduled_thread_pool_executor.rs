@@ -82,8 +82,10 @@ fn default_shard_total() -> usize {
 }
 
 
+type Task<M> = Box<dyn FnOnce(&mut M) + Send>;
+
 pub struct DelayedWorkQueue<M> {
-    scheduled_tasks: BTreeMap<(Instant, usize), Box<dyn FnOnce(&mut M) + Send>>,
+    scheduled_tasks: BTreeMap<(Instant, usize), Task<M>>,
     sequence: usize,
     keep_alive_handles: FxHashMap<usize, (Instant, usize)>,
     pending_tasks: FxHashMap<usize, (LocalBoxFuture<'static, ()>, Waker, usize)>,
@@ -106,7 +108,7 @@ impl<M> DelayedWorkQueue<M> {
         }
     }
 
-    pub(crate) fn schedule(&mut self, delay: Duration, task: Box<dyn FnOnce(&mut M) + Send>) -> (Instant, usize) {
+    pub(crate) fn schedule(&mut self, delay: Duration, task: Task<M>) -> (Instant, usize) {
         let now = Instant::now();
         let deadline = now.checked_add(delay).unwrap_or_else(|| now + Duration::from_secs(u32::MAX.into()));
         let worker_handle = (deadline, self.sequence);
@@ -125,7 +127,7 @@ impl<M> DelayedWorkQueue<M> {
         }
     }
 
-    pub(crate) fn next(&mut self, now: Instant) -> Option<Box<dyn FnOnce(&mut M) + Send>> {
+    pub(crate) fn next(&mut self, now: Instant) -> Option<Task<M>> {
         let entry = self.scheduled_tasks.first_entry()?;
         if entry.key().0 > now {
             return None;
@@ -133,7 +135,7 @@ impl<M> DelayedWorkQueue<M> {
         Some(entry.remove())
     }
 
-    pub(crate) fn setup_keep_alive(&mut self, key: usize, delay: Duration, task: Box<dyn FnOnce(&mut M) + Send>) {
+    pub(crate) fn setup_keep_alive(&mut self, key: usize, delay: Duration, task: Task<M>) {
         let worker_handle = self.schedule(delay, task);
         if let Some(old_keep_alive) = self.keep_alive_handles.insert(key, worker_handle) {
             self.scheduled_tasks.remove(&old_keep_alive);

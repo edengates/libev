@@ -49,7 +49,8 @@ impl ListenerAdapter for TestHandler {
 
     async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
         self.callback.send(message.to_vec()).ok();
-        Ok(channel.close())
+        channel.close();
+        Ok(())
     }
 }
 
@@ -58,7 +59,8 @@ struct SessionInvalidateAdapter;
 
 impl ListenerAdapter for SessionInvalidateAdapter {
     async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
-        Ok(channel.close())
+        channel.close();
+        Ok(())
     }
 }
 
@@ -69,7 +71,8 @@ struct ShardManagerAdapter {
 impl ListenerAdapter for ShardManagerAdapter {
     async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
         self.callback.send(channel.socket_manager().worker_pool().shards_total()).ok();
-        Ok(channel.close())
+        channel.close();
+        Ok(())
     }
 }
 
@@ -114,7 +117,8 @@ struct MessageReceivedAdapter;
 impl ListenerAdapter for MessageReceivedAdapter {
     async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
         channel.send_message(message).await?;
-        Ok(channel.close())
+        channel.close();
+        Ok(())
     }
 }
 
@@ -192,7 +196,8 @@ struct ChannelTimeoutAdapter {
 impl ListenerAdapter for ChannelTimeoutAdapter {
     async fn on_channel_timeout(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
         self.callback.send(()).ok();
-        Ok(channel.close())
+        channel.close();
+        Ok(())
     }
 }
 
@@ -371,7 +376,8 @@ struct ChannelDeleteAdapter {
 impl ListenerAdapter for ChannelDeleteAdapter {
     async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
         channel.send_message(BytesMut::from(&payload(self.length, 0)[..])).queue(|_| (), |_| ())?;
-        Ok(channel.close())
+        channel.close();
+        Ok(())
     }
 }
 
@@ -424,7 +430,8 @@ struct ChannelCloseAdapter;
 impl ListenerAdapter for ChannelCloseAdapter {
     async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
         channel.close();
-        Ok(channel.close())
+        channel.close();
+        Ok(())
     }
 }
 
@@ -434,7 +441,8 @@ struct MessageBulkSendAdapter;
 impl ListenerAdapter for MessageBulkSendAdapter {
     async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
         channel.send_message(BytesMut::zeroed(4 * 1024 * 1024)).queue(|_| (), |_| ())?;
-        Ok(channel.close())
+        channel.close();
+        Ok(())
     }
 }
 
@@ -485,7 +493,8 @@ struct GuildReadyAdapter {
 impl ListenerAdapter for GuildReadyAdapter {
     async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
         self.callback.send(self.id).ok();
-        Ok(channel.close())
+        channel.close();
+        Ok(())
     }
 }
 

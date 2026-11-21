@@ -343,7 +343,7 @@ mod tests {
 
         for message in [&b"ping"[..], b"pong", b"0123456789abcdefXYZ"] {
             client.write_all(message).unwrap();
-            receive(&manager, &buffer_ring, &server);
+            receive(manager, &buffer_ring, &server);
             let mut entries = Vec::new();
             while entries.is_empty() {
                 manager.poll(1000, |res, flags, user_data| entries.push((res, flags, user_data))).unwrap();

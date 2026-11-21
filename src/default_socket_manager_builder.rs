@@ -55,6 +55,12 @@ pub struct DefaultSocketManagerBuilder<P = Rc<BufferedSink>> {
     timeout: Duration,
 }
 
+impl Default for DefaultSocketManagerBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DefaultSocketManagerBuilder {
     /// Creates a [`DefaultSocketManagerBuilder`] with recommended default settings.
     ///
@@ -358,29 +364,29 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
             None => ScheduledThreadPoolExecutor::new(0, 64)?,
         };
         let worker_pool = self.worker_pool.unwrap_or_else(|| socket_pool.clone());
-        let threading_config = ThreadingConfig::new(
+        let threading_config = ThreadingConfig {
             socket_pool,
             worker_pool,
-            self.backlog,
-            self.concurrency,
-            self.buffer_size,
-            self.reconnect_delay,
-            self.max_reconnect_delay,
-            self.threshold,
-            self.large_threshold,
-            self.shutdown_timeout,
-            self.chunk_limit,
-            self.packet_limit,
-        );
-        let socket_config = SocketConfig::new(
-            self.tcp_no_delay,
-            self.close_timeout,
-            self.connect_timeout,
-            self.afk_timeout,
-            self.is_address_shared,
-            self.is_fallback_enabled,
-            self.timeout,
-        );
+            backlog: self.backlog,
+            concurrency: self.concurrency,
+            buffer_size: self.buffer_size,
+            reconnect_delay: self.reconnect_delay,
+            max_reconnect_delay: self.max_reconnect_delay,
+            threshold: self.threshold,
+            large_threshold: self.large_threshold,
+            shutdown_timeout: self.shutdown_timeout,
+            chunk_limit: self.chunk_limit,
+            packet_limit: self.packet_limit,
+        };
+        let socket_config = SocketConfig {
+            tcp_no_delay: self.tcp_no_delay,
+            close_timeout: self.close_timeout,
+            connect_timeout: self.connect_timeout,
+            afk_timeout: self.afk_timeout,
+            is_address_shared: self.is_address_shared,
+            is_fallback_enabled: self.is_fallback_enabled,
+            timeout: self.timeout,
+        };
         Ok(SocketManager::new(threading_config, socket_config, provider))
     }
 }

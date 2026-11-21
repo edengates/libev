@@ -92,6 +92,7 @@ mod linux {
         }
     }
 
+    #[allow(clippy::large_enum_variant)]
     pub enum CompletionService {
         Epoll(epoll::CompletionService),
         IoUring(uring::CompletionService),

@@ -20,51 +20,21 @@ use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 pub struct ThreadingConfig {
-    worker_pool: ScheduledThreadPoolExecutor,
-    socket_pool: ScheduledThreadPoolExecutor,
-    backlog: i32,
-    concurrency: usize,
-    buffer_size: usize,
-    reconnect_delay: Duration,
-    max_reconnect_delay: Duration,
-    threshold: usize,
-    large_threshold: usize,
-    shutdown_timeout: Duration,
-    chunk_limit: usize,
-    packet_limit: usize,
+    pub(crate) worker_pool: ScheduledThreadPoolExecutor,
+    pub(crate) socket_pool: ScheduledThreadPoolExecutor,
+    pub(crate) backlog: i32,
+    pub(crate) concurrency: usize,
+    pub(crate) buffer_size: usize,
+    pub(crate) reconnect_delay: Duration,
+    pub(crate) max_reconnect_delay: Duration,
+    pub(crate) threshold: usize,
+    pub(crate) large_threshold: usize,
+    pub(crate) shutdown_timeout: Duration,
+    pub(crate) chunk_limit: usize,
+    pub(crate) packet_limit: usize,
 }
 
 impl ThreadingConfig {
-    pub fn new(
-        socket_pool: ScheduledThreadPoolExecutor,
-        worker_pool: ScheduledThreadPoolExecutor,
-        backlog: i32,
-        concurrency: usize,
-        buffer_size: usize,
-        reconnect_delay: Duration,
-        max_reconnect_delay: Duration,
-        threshold: usize,
-        large_threshold: usize,
-        shutdown_timeout: Duration,
-        chunk_limit: usize,
-        packet_limit: usize,
-    ) -> Self {
-        Self {
-            socket_pool,
-            worker_pool,
-            backlog,
-            concurrency,
-            buffer_size,
-            reconnect_delay,
-            max_reconnect_delay,
-            threshold,
-            large_threshold,
-            shutdown_timeout,
-            chunk_limit,
-            packet_limit,
-        }
-    }
-
     pub fn socket_pool(&self) -> &ScheduledThreadPoolExecutor {
         &self.socket_pool
     }

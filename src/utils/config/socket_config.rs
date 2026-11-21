@@ -18,36 +18,16 @@ use std::time::Duration;
 
 #[derive(Clone)]
 pub struct SocketConfig {
-    tcp_no_delay: bool,
-    close_timeout: Option<Duration>,
-    connect_timeout: Duration,
-    afk_timeout: Option<Duration>,
-    is_address_shared: bool,
-    is_fallback_enabled: bool,
-    timeout: Duration,
+    pub(crate) tcp_no_delay: bool,
+    pub(crate) close_timeout: Option<Duration>,
+    pub(crate) connect_timeout: Duration,
+    pub(crate) afk_timeout: Option<Duration>,
+    pub(crate) is_address_shared: bool,
+    pub(crate) is_fallback_enabled: bool,
+    pub(crate) timeout: Duration,
 }
 
 impl SocketConfig {
-    pub fn new(
-        tcp_no_delay: bool,
-        close_timeout: Option<Duration>,
-        connect_timeout: Duration,
-        afk_timeout: Option<Duration>,
-        is_address_shared: bool,
-        is_fallback_enabled: bool,
-        timeout: Duration,
-    ) -> Self {
-        Self {
-            tcp_no_delay,
-            close_timeout,
-            connect_timeout,
-            afk_timeout,
-            is_address_shared,
-            is_fallback_enabled,
-            timeout,
-        }
-    }
-
     pub fn tcp_no_delay(&self) -> bool {
         self.tcp_no_delay
     }
