@@ -7,7 +7,7 @@ Depending on your changes there are certain rules you have to follow if you expe
 1. Reference documentation or issues that are relevant to your changes.
 1. If you implement a new feature, include some examples on how you intend it to be used in your PR description.
 1. Write documentation for all public API methods and types.
-1. Follow the libev coding style, even if unconventional, we want to keep it consistent to maintain readability.
+1. Follow the libev coding style, even if unconventional, it is kept consistent to maintain readability.
 1. Try to limit your PR to one logical change or closely related changes.  
     For instance, do not refactor other code that is irrelevant to your changes. If you want to refactor something, make a dedicated PR.
 

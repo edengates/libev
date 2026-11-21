@@ -30,8 +30,8 @@ bytes = "1" # required for the BytesMut messages received and sent by the listen
 
 ## Getting started
 
-We provide a number of [examples](https://github.com/java-nio-toolkit/libev/tree/master/examples) to introduce you to
-libev. You can also take a look at our [Documentation](https://docs.rs/libev).
+There are a number of [examples](https://github.com/java-nio-toolkit/libev/tree/master/examples) to introduce you to
+libev. You can also take a look at the [Documentation](https://docs.rs/libev).
 
 Every socket implemented by libev starts out using the
 [DefaultSocketManagerBuilder](https://docs.rs/libev/latest/libev/struct.DefaultSocketManagerBuilder.html). The builder
@@ -136,9 +136,56 @@ fn main() -> io::Result<()> {
 You can find a more thorough example with the
 [MessageCreateExample](https://github.com/java-nio-toolkit/libev/blob/master/examples/message_create.rs) struct.
 
+## SocketAction
+
+In this library, the `SocketAction` trait is used as a message builder for all operations on a channel. This trait
+represents a lazy message builder, as shown in this simple example:
+
+```rust
+channel.send_message(BytesMut::from("Hello Friend!")) // Create the message
+    .queue(|_| (), |_| ())?; // Send the message
+```
+
+> [!IMPORTANT]
+> The final call to `queue(...)` sends the message. You can also send the message synchronously with `complete()` or
+> as a future with `submit()`.
+
+The `SocketAction` trait also supports a number of operators to avoid callback hell:
+
+* `map`
+  Convert the result of the `SocketAction` to a different value
+* `flat_map`
+  Chain another `SocketAction` on the result
+* `on_error_map`
+  Supply a fallback value when the `SocketAction` fails
+* `on_error_flat_map`
+  Supply a fallback `SocketAction` when the `SocketAction` fails
+
+As well as combinators like:
+
+* `and`
+  Require another `SocketAction` to complete successfully
+
+Example:
+
+```rust
+fn greet<'a>(channel: &'a mut MessageChannel, target: &'a mut MessageChannel) -> impl SocketAction<String> + 'a {
+    channel.send_message(BytesMut::from("Hello Friend!")) // send the greeting
+        .flat_map(move |_| target.send_message(BytesMut::from("A friend was greeted!"))) // then tell the target
+        .map(|_| String::from("The friend was greeted")) // then return the result
+        .on_error_map(|error| error.to_string()) // or the reason why it failed
+}
+```
+
+This could then be used in code:
+
+```rust
+greet(channel, target).queue(|result| println!("{result}"), |_| ())?;
+```
+
 ## Contributing to libev
 
-If you want to contribute to libev, make sure to base your branch off of our master branch (or a feature-branch) and
+If you want to contribute to libev, make sure to base your branch off of the master branch (or a feature-branch) and
 create your PR into that same branch.
 
-Please follow our [Contributing Guidelines](.github/CONTRIBUTING.md).
+Please follow the [Contributing Guidelines](.github/CONTRIBUTING.md).
