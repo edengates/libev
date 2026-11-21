@@ -21,6 +21,26 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 pub(crate) use std::os::windows::io::BorrowedSocket;
 use std::os::windows::io::AsSocket;
 use std::sync::mpsc::Receiver;
+use windows_sys::Win32::System::Threading::{
+    GetCurrentThread, SetThreadInformation, THREAD_POWER_THROTTLING_CURRENT_VERSION,
+    THREAD_POWER_THROTTLING_EXECUTION_SPEED, THREAD_POWER_THROTTLING_STATE, ThreadPowerThrottling,
+};
+
+pub(crate) fn set_power_suppressed(is_power_suppressed_enabled: bool) {
+    let state = THREAD_POWER_THROTTLING_STATE {
+        Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: if is_power_suppressed_enabled { 0 } else { THREAD_POWER_THROTTLING_EXECUTION_SPEED },
+        StateMask: 0,
+    };
+    unsafe {
+        SetThreadInformation(
+            GetCurrentThread(),
+            ThreadPowerThrottling,
+            (&raw const state).cast(),
+            size_of::<THREAD_POWER_THROTTLING_STATE>() as u32,
+        );
+    }
+}
 
 pub(crate) mod socket;
 pub(crate) mod event;
@@ -51,4 +71,36 @@ pub(crate) fn connect(
     socket_manager: SocketManager,
 ) -> Receiver<io::Result<()>> {
     pool.register(move || Box::new(SocketChannel::connect(socket, address, socket_manager)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::System::Threading::GetThreadInformation;
+
+    fn control_mask() -> u32 {
+        let mut state = THREAD_POWER_THROTTLING_STATE {
+            Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
+            ControlMask: 0,
+            StateMask: 0,
+        };
+        let data = unsafe {
+            GetThreadInformation(
+                GetCurrentThread(),
+                ThreadPowerThrottling,
+                (&raw mut state).cast(),
+                size_of::<THREAD_POWER_THROTTLING_STATE>() as u32,
+            )
+        };
+        assert_ne!(data, 0);
+        state.ControlMask
+    }
+
+    #[test]
+    fn set_power_suppressed() {
+        super::set_power_suppressed(false);
+        assert_eq!(control_mask(), THREAD_POWER_THROTTLING_EXECUTION_SPEED);
+        super::set_power_suppressed(true);
+        assert_eq!(control_mask(), 0);
+    }
 }

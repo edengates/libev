@@ -32,6 +32,7 @@ pub struct ThreadingConfig {
     pub(crate) shutdown_timeout: Duration,
     pub(crate) chunk_limit: usize,
     pub(crate) packet_limit: usize,
+    pub(crate) is_power_suppressed_enabled: bool,
 }
 
 impl ThreadingConfig {
@@ -81,6 +82,10 @@ impl ThreadingConfig {
 
     pub fn packet_limit(&self) -> usize {
         self.packet_limit
+    }
+
+    pub fn is_power_suppressed_enabled(&self) -> bool {
+        self.is_power_suppressed_enabled
     }
 
     pub fn shutdown(&self) {
