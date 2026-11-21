@@ -31,10 +31,10 @@ bytes = "1" # required for the BytesMut messages received and sent by the listen
 ## Getting started
 
 There are a number of [examples](https://github.com/java-nio-toolkit/libev/tree/master/examples) to introduce you to
-libev. You can also take a look at the [Documentation](https://java-nio-toolkit.github.io/libev/).
+libev. You can also take a look at the [Documentation](https://docs.rs/libev).
 
 Every socket implemented by libev starts out using the
-[DefaultSocketManagerBuilder](https://java-nio-toolkit.github.io/libev/libev/struct.DefaultSocketManagerBuilder.html). The builder
+[DefaultSocketManagerBuilder](https://docs.rs/libev/latest/libev/struct.DefaultSocketManagerBuilder.html). The builder
 provides a set of settings for the thread pools, buffers and timeouts it wants to use:
 
 * `set_socket_pool` and `set_worker_pool` - Choose the thread pools that accept and serve the connections
