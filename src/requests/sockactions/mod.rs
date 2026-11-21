@@ -16,5 +16,6 @@
 
 mod socket_action;
 pub use socket_action::SocketAction;
+pub mod operator;
 mod message_create_action;
 pub use message_create_action::MessageCreateAction;
