@@ -240,7 +240,8 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
     /// Sets value for the `SO_REUSEPORT` option on the sockets bound by [`SocketManager::bind`].
     ///
     /// This allows multiple threads to bind to the same port. On Windows this uses `SO_REUSEADDR` instead of
-    /// `SO_EXCLUSIVEADDRUSE`.
+    /// `SO_EXCLUSIVEADDRUSE`. On FreeBSD this uses `SO_REUSEPORT_LB` instead, so incoming connections are load
+    /// balanced.
     ///
     /// Default: `false`
     pub fn set_address_shared(mut self, is_address_shared: bool) -> Self {

@@ -1447,6 +1447,6 @@ fn shared() {
         assert_eq!(client.read(&mut [0; 1]).unwrap(), 0);
         ids.push(receiver.recv_timeout(Duration::from_secs(5)).unwrap());
     }
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", target_os = "freebsd", windows))]
     assert!(ids.contains(&0) && ids.contains(&1));
 }

@@ -43,6 +43,9 @@ pub(crate) fn listener(
     let listener = new_socket(Domain::for_address(*address))?;
     listener.set_reuse_address(true)?;
     if is_address_shared {
+        #[cfg(target_os = "freebsd")]
+        listener.set_reuse_port_lb(true)?;
+        #[cfg(not(target_os = "freebsd"))]
         listener.set_reuse_port(true)?;
     }
     if address.is_ipv6() {
