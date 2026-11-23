@@ -255,7 +255,9 @@ mod tests {
     }
 
     fn manager() -> ScheduledExecutorService {
-        ScheduledExecutorService::new(Arc::new(CompletionService::new().unwrap()), std::sync::mpsc::channel().0, 64)
+        let port = Arc::new(CompletionService::new().unwrap());
+        let dispatcher = crate::utils::concurrent::Dispatcher::new(&port).0;
+        ScheduledExecutorService::new(port, dispatcher, 64)
     }
 
     fn socket_manager<F>(configure: F) -> SocketManager

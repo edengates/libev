@@ -17,7 +17,7 @@
 use crate::utils::concurrent::{DelayedCompletableFuture, ThreadPerTaskExecutor};
 use crate::handle::Channel;
 use crate::handle::CompletionService;
-use crate::utils::concurrent::{ScheduledExecutorService, DISPATCH, SHUTDOWN, Task};
+use crate::utils::concurrent::{Dispatcher, ScheduledExecutorService, SHUTDOWN, Task};
 use log::error;
 use std::future::Future;
 use std::io;
@@ -31,7 +31,7 @@ use std::time::Duration;
 /// Once it is shut down, new tasks are rejected with an error.
 pub struct ExecutorCompletionService {
     port: Arc<CompletionService>,
-    sender: Sender<Task>,
+    dispatcher: Dispatcher,
     shutdown_handle: Mutex<Receiver<()>>,
 }
 
@@ -49,20 +49,21 @@ impl ExecutorCompletionService {
         factory: fn(u32) -> io::Result<CompletionService>,
     ) -> io::Result<Self> {
         let port = Arc::new(factory(capacity as u32)?);
-        let (sender, receiver) = mpsc::channel::<Task>();
+        let (dispatcher, receiver) = Dispatcher::new(&port);
         let (signal, shutdown_handle) = mpsc::channel::<()>();
         executor.execute({
             let port = Arc::clone(&port);
-            let sender = sender.clone();
+            let dispatcher = dispatcher.clone();
             move || {
                 let _signal = signal;
-                let mut manager = ScheduledExecutorService::new(port, sender, capacity);
+                let mut manager = ScheduledExecutorService::new(port, dispatcher.clone(), capacity);
                 while !manager.is_shutdown() {
                     if let Err(error) = manager.run_worker() {
                         error!(error:% = error; "Encountered error in socket worker");
                         break;
                     }
                     // Now run all tasks before trying to run IO again.
+                    dispatcher.reset();
                     while let Ok(task) = receiver.try_recv() {
                         if panic::catch_unwind(AssertUnwindSafe(|| task(&mut manager))).is_err() {
                             error!("Caught an exception in queue processing thread");
@@ -77,7 +78,7 @@ impl ExecutorCompletionService {
         })?;
         Ok(Self {
             port,
-            sender,
+            dispatcher,
             shutdown_handle: Mutex::new(shutdown_handle),
         })
     }
@@ -132,10 +133,7 @@ impl ExecutorCompletionService {
     }
 
     fn submit(&self, task: Task) -> io::Result<()> {
-        self.sender
-            .send(task)
-            .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))?;
-        self.port().wakeup(DISPATCH)
+        self.dispatcher.dispatch(task)
     }
 
     /// Shuts down this [`ExecutorCompletionService`], waiting for at most `timeout` for its connections to close.

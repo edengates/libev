@@ -23,6 +23,8 @@ mod scheduled_thread_pool_executor;
 pub use scheduled_thread_pool_executor::ScheduledThreadPoolExecutor;
 mod thread_waker;
 pub(crate) use thread_waker::ThreadWaker;
+mod dispatcher;
+pub(crate) use dispatcher::Dispatcher;
 mod executor_completion_service;
 pub use executor_completion_service::ExecutorCompletionService;
 mod scheduled_executor_service;

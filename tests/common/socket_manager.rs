@@ -526,6 +526,26 @@ impl ListenerAdapter<String, String> for ThreadTextAdapter {
 }
 
 #[derive(Clone)]
+struct QueueAdapter {
+    callback: Sender<io::Result<()>>,
+}
+
+impl ListenerAdapter for QueueAdapter {
+    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+        let (success, failure) = (self.callback.clone(), self.callback.clone());
+        channel.thread_channel().send_message(BytesMut::from(&b"ping"[..])).queue(
+            move |_| {
+                success.send(Ok(())).ok();
+            },
+            move |error| {
+                failure.send(Err(error)).ok();
+            },
+        );
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
 struct DeadLockAdapter {
     callback: Sender<io::Result<()>>,
 }
@@ -760,6 +780,72 @@ fn deadlock() {
     let _client = TcpStream::connect(address).unwrap();
     let data = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(data.unwrap_err().kind(), io::ErrorKind::Deadlock);
+}
+
+#[test]
+fn thread_queue() {
+    let (sender, receiver) = mpsc::channel();
+    let server = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .add_event_listener(ThreadChannelAdapter { callback: sender })
+        .build()
+        .unwrap();
+    let address = server.bind("127.0.0.1:0").unwrap();
+
+    let mut client = TcpStream::connect(address).unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let channel = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (callback, results) = mpsc::channel();
+    let (success, failure) = (callback.clone(), callback);
+    let caller = thread::current().id();
+    channel.send_message(BytesMut::from(&b"ping"[..])).queue(
+        move |_| {
+            success.send((Ok(()), thread::current().id())).ok();
+        },
+        move |error| {
+            failure.send((Err(error), thread::current().id())).ok();
+        },
+    );
+    let (data, executor) = results.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(data.is_ok());
+    assert_ne!(executor, caller);
+
+    channel.close().unwrap();
+    client.read_to_end(&mut Vec::new()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !server.channel_cache().is_empty() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(1));
+    }
+    let (callback, results) = mpsc::channel();
+    let (success, failure) = (callback.clone(), callback);
+    channel.send_message(BytesMut::from(&b"pong"[..])).queue(
+        move |_| {
+            success.send((Ok(()), thread::current().id())).ok();
+        },
+        move |error| {
+            failure.send((Err(error), thread::current().id())).ok();
+        },
+    );
+    let (data, _) = results.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(data.unwrap_err().kind(), io::ErrorKind::NotConnected);
+}
+
+#[test]
+fn thread_queue_own() {
+    let (sender, receiver) = mpsc::channel();
+    let server = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .add_event_listener(QueueAdapter { callback: sender })
+        .build()
+        .unwrap();
+    let address = server.bind("127.0.0.1:0").unwrap();
+
+    let mut client = TcpStream::connect(address).unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    assert!(receiver.recv_timeout(Duration::from_secs(5)).unwrap().is_ok());
+    let mut received = [0; 4];
+    client.read_exact(&mut received).unwrap();
+    assert_eq!(&received, b"ping");
 }
 
 #[test]

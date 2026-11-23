@@ -31,6 +31,43 @@ impl<'a, N, P> ThreadMessageCreateAction<'a, N, P> {
     }
 }
 
+impl<N: 'static, P: Send + 'static> ThreadMessageCreateAction<'_, N, P> {
+    /// Submits a request for execution without waiting for it.
+    ///
+    /// The `success` callback will be called at a convenient time, the `failure` callback will be called if the
+    /// request encounters an error at its execution point or can not be executed anymore. Both are called on the
+    /// thread of the channel, unlike [`complete`](SocketAction::complete) this does not wait for the result.
+    pub fn queue<S, F>(self, success: S, failure: F)
+    where
+        S: FnOnce(()) + Send + 'static,
+        F: FnOnce(io::Error) + Send + 'static,
+    {
+        let message = self.message;
+        let mut failure = Failure(Some(failure));
+        self.channel
+            .execute(move |channel| {
+                let Some(failure) = failure.0.take() else {
+                    return;
+                };
+                match channel.send_message(message).complete() {
+                    Ok(data) => success(data),
+                    Err(error) => failure(error),
+                }
+            })
+            .ok();
+    }
+}
+
+struct Failure<F: FnOnce(io::Error)>(Option<F>);
+
+impl<F: FnOnce(io::Error)> Drop for Failure<F> {
+    fn drop(&mut self) {
+        if let Some(failure) = self.0.take() {
+            failure(io::ErrorKind::NotConnected.into());
+        }
+    }
+}
+
 impl<N: 'static, P: Send + 'static> SocketAction<()> for ThreadMessageCreateAction<'_, N, P> {
     fn complete(self) -> io::Result<()> {
         let message = self.message;

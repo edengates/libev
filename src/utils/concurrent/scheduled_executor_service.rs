@@ -20,7 +20,7 @@ use crate::entities::channel::mixin::middleman::MessageChannelMixin;
 use crate::entities::snowflake::{EPOCH, TIMESTAMP_OFFSET};
 use crate::handle::Channel;
 use crate::handle::{EventArray, CompletionService};
-use crate::utils::concurrent::ThreadWaker;
+use crate::utils::concurrent::{Dispatcher, ThreadWaker};
 use rustc_hash::FxHashMap;
 use futures_core::future::LocalBoxFuture;
 use crate::utils::concurrent::scheduled_thread_pool_executor::DelayedWorkQueue;
@@ -33,7 +33,6 @@ use std::panic::{self, AssertUnwindSafe};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
 use std::task::Waker;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -49,8 +48,7 @@ thread_local! {
 }
 
 struct Worker {
-    sender: Sender<Task>,
-    port: Arc<CompletionService>,
+    dispatcher: Dispatcher,
     id: u64,
     timestamp: u64,
     increment: u64,
@@ -91,10 +89,9 @@ pub struct ScheduledExecutorService {
 }
 
 impl ScheduledExecutorService {
-    pub(crate) fn new(port: Arc<CompletionService>, sender: Sender<Task>, capacity: usize) -> Self {
+    pub(crate) fn new(port: Arc<CompletionService>, dispatcher: Dispatcher, capacity: usize) -> Self {
         WORKER.set(Some(Worker {
-            sender,
-            port: Arc::clone(&port),
+            dispatcher,
             id: WORKERS.fetch_add(1, Ordering::Relaxed) & 0x3FF,
             timestamp: 0,
             increment: 0,
@@ -122,12 +119,12 @@ impl ScheduledExecutorService {
     pub(crate) fn thread_channel() -> ThreadChannel {
         WORKER.with_borrow_mut(|worker| {
             let worker = worker.as_mut().unwrap();
-            ThreadChannel::new(worker.snowflake(), 0, worker.sender.clone(), Arc::clone(&worker.port))
+            ThreadChannel::new(worker.snowflake(), 0, worker.dispatcher.clone())
         })
     }
 
     pub(crate) fn is_current(port: &Arc<CompletionService>) -> bool {
-        WORKER.with_borrow(|worker| worker.as_ref().is_some_and(|worker| Arc::ptr_eq(&worker.port, port)))
+        WORKER.with_borrow(|worker| worker.as_ref().is_some_and(|worker| Arc::ptr_eq(worker.dispatcher.port(), port)))
     }
 
     pub(crate) fn add_channel(&mut self, id: u64, channel: &Rc<MessageChannelMixin>) {
@@ -355,12 +352,15 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn manager() -> ScheduledExecutorService {
         let port = Arc::new(crate::handle::CompletionService::new_factory()(64).unwrap());
-        ScheduledExecutorService::new(port, std::sync::mpsc::channel().0, 64)
+        let dispatcher = Dispatcher::new(&port).0;
+        ScheduledExecutorService::new(port, dispatcher, 64)
     }
 
     #[cfg(any(windows, target_os = "macos", target_os = "freebsd"))]
     fn manager() -> ScheduledExecutorService {
-        ScheduledExecutorService::new(Arc::new(CompletionService::new().unwrap()), std::sync::mpsc::channel().0, 64)
+        let port = Arc::new(CompletionService::new().unwrap());
+        let dispatcher = Dispatcher::new(&port).0;
+        ScheduledExecutorService::new(port, dispatcher, 64)
     }
 
     fn channel(active: bool) -> Box<HeartbeatChannel> {

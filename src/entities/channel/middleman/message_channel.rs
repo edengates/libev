@@ -259,7 +259,7 @@ mod tests {
             .unwrap();
         let buffer = Rc::default();
         let port = std::sync::Arc::new(crate::handle::CompletionService::new_factory()(8).unwrap());
-        let thread_channel = ThreadChannel::new(0, 0, std::sync::mpsc::channel().0, port);
+        let thread_channel = ThreadChannel::new(0, 0, crate::utils::concurrent::Dispatcher::new(&port).0);
         let head = BufferedSink::new(&socket_manager, &buffer, &thread_channel, &EventQueue::default());
         let mut channel: MessageChannel = MessageChannel::new(
             socket_manager,
