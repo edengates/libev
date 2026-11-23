@@ -15,5 +15,6 @@
  */
 
 //! Top-level abstractions related to channel types.
+pub mod concrete;
 pub mod middleman;
 pub(crate) mod mixin;

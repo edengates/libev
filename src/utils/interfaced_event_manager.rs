@@ -16,6 +16,7 @@
 
 use crate::SocketManager;
 use crate::entities::channel::middleman::MessageChannel;
+use crate::entities::channel::concrete::ThreadChannel;
 use crate::hooks::ListenerAdapter;
 use crate::requests::Sink;
 use crate::utils::{EventManager, EventQueue};
@@ -39,9 +40,21 @@ pub struct InterfacedEventManager<P: EventManager, L, O> {
 }
 
 impl<P: EventManager, L, O: Any + Send> InterfacedEventManager<P, L, O> {
-    pub(crate) fn new(lower: P, listener: L, socket_manager: &SocketManager, buffer: &Rc<RefCell<Buffer>>) -> Self {
+    pub(crate) fn new(
+        lower: P,
+        listener: L,
+        socket_manager: &SocketManager,
+        buffer: &Rc<RefCell<Buffer>>,
+        thread_channel: &ThreadChannel,
+    ) -> Self {
         let events = EventQueue::default();
-        let channel = MessageChannel::new(socket_manager.clone(), Rc::clone(buffer), Rc::clone(&events), lower.channel());
+        let channel = MessageChannel::new(
+            socket_manager.clone(),
+            Rc::clone(buffer),
+            thread_channel.at_position(lower.position() + 1),
+            Rc::clone(&events),
+            lower.channel(),
+        );
         Self {
             lower,
             listener,
@@ -105,6 +118,19 @@ where
 
     fn channel(&self) -> Rc<dyn Sink<O>> {
         Rc::clone(&self.outbound) as Rc<dyn Sink<O>>
+    }
+
+    fn position(&self) -> usize {
+        self.lower.position() + 1
+    }
+
+    fn channels(&self, channels: &mut Vec<Box<dyn Any>>) {
+        self.lower.channels(channels);
+        channels.push(Box::new(self.channel.clone()));
+    }
+
+    fn thread_channel(&self) -> Box<dyn Any + Send + Sync> {
+        Box::new(self.channel.thread_channel().clone())
     }
 
     async fn handle(&mut self) -> io::Result<bool> {

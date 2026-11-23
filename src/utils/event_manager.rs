@@ -15,6 +15,7 @@
  */
 
 use crate::SocketManager;
+use crate::entities::channel::concrete::ThreadChannel;
 use crate::entities::channel::mixin::middleman::MessageChannelMixin;
 use crate::requests::Sink;
 use crate::events::Event;
@@ -29,8 +30,11 @@ use std::sync::Arc;
 
 pub type EventQueue = Rc<RefCell<VecDeque<Box<dyn Event>>>>;
 
-pub type EventManagerProvider =
-    Arc<dyn Fn(&SocketManager, &Rc<RefCell<Buffer>>, &EventQueue) -> Rc<dyn EventManagerProxy> + Send + Sync>;
+pub type EventManagerProvider = Arc<
+    dyn Fn(&SocketManager, &Rc<RefCell<Buffer>>, &ThreadChannel, &EventQueue) -> Rc<dyn EventManagerProxy>
+        + Send
+        + Sync,
+>;
 
 /// An interface for libev's event manager system.
 #[allow(async_fn_in_trait)]
@@ -41,16 +45,36 @@ pub trait EventManager: 'static {
 
     fn channel(&self) -> Rc<dyn Sink<Self::Output>>;
 
+    fn position(&self) -> usize;
+
+    fn channels(&self, channels: &mut Vec<Box<dyn Any>>);
+
+    fn thread_channel(&self) -> Box<dyn Any + Send + Sync>;
+
     async fn handle(&mut self) -> io::Result<bool>;
 
     fn clear(&mut self);
 }
 
 pub trait EventManagerProxy {
+    fn channels(&self) -> Vec<Box<dyn Any>>;
+
+    fn thread_channel(&self) -> Box<dyn Any + Send + Sync>;
+
     fn handle(self: Rc<Self>, channel: Rc<MessageChannelMixin>) -> LocalBoxFuture<'static, ()>;
 }
 
 impl<P: EventManager> EventManagerProxy for RefCell<P> {
+    fn channels(&self) -> Vec<Box<dyn Any>> {
+        let mut channels = Vec::new();
+        self.borrow().channels(&mut channels);
+        channels
+    }
+
+    fn thread_channel(&self) -> Box<dyn Any + Send + Sync> {
+        self.borrow().thread_channel()
+    }
+
     #[allow(clippy::await_holding_refcell_ref)]
     fn handle(self: Rc<Self>, channel: Rc<MessageChannelMixin>) -> LocalBoxFuture<'static, ()> {
         Box::pin(async move {

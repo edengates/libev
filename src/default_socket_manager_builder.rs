@@ -15,6 +15,7 @@
  */
 
 use crate::SocketManager;
+use crate::entities::channel::concrete::ThreadChannel;
 use crate::handle::socket;
 use crate::hooks::ListenerAdapter;
 use crate::utils::concurrent::ScheduledThreadPoolExecutor;
@@ -29,7 +30,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-type PipelineFactory<P> = Arc<dyn Fn(&SocketManager, &Rc<RefCell<Buffer>>, &EventQueue) -> P + Send + Sync>;
+type PipelineFactory<P> =
+    Arc<dyn Fn(&SocketManager, &Rc<RefCell<Buffer>>, &ThreadChannel, &EventQueue) -> P + Send + Sync>;
 
 /// Used to create new instances of [`SocketManager`].
 pub struct DefaultSocketManagerBuilder<P = Rc<BufferedSink>> {
@@ -330,8 +332,9 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
         O: Any + Send,
     {
         let factory = Arc::clone(&self.factory);
-        self.set_factory(Arc::new(move |socket_manager, buffer, inbound| {
-            InterfacedEventManager::new(factory(socket_manager, buffer, inbound), provider(), socket_manager, buffer)
+        self.set_factory(Arc::new(move |socket_manager, buffer, thread_channel, inbound| {
+            let lower = factory(socket_manager, buffer, thread_channel, inbound);
+            InterfacedEventManager::new(lower, provider(), socket_manager, buffer, thread_channel)
         }))
     }
 
@@ -374,8 +377,8 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
             return Err(io::ErrorKind::InvalidInput.into());
         }
         let factory = self.factory;
-        let provider: EventManagerProvider = Arc::new(move |socket_manager, buffer, inbound| {
-            Rc::new(RefCell::new(factory(socket_manager, buffer, inbound))) as Rc<dyn EventManagerProxy>
+        let provider: EventManagerProvider = Arc::new(move |socket_manager, buffer, thread_channel, inbound| {
+            Rc::new(RefCell::new(factory(socket_manager, buffer, thread_channel, inbound))) as Rc<dyn EventManagerProxy>
         });
         let socket_pool = match self.socket_pool {
             Some(socket_pool) => socket_pool,

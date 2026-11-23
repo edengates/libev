@@ -53,9 +53,10 @@ impl ExecutorCompletionService {
         let (signal, shutdown_handle) = mpsc::channel::<()>();
         executor.execute({
             let port = Arc::clone(&port);
+            let sender = sender.clone();
             move || {
                 let _signal = signal;
-                let mut manager = ScheduledExecutorService::new(port, capacity);
+                let mut manager = ScheduledExecutorService::new(port, sender, capacity);
                 while !manager.is_shutdown() {
                     if let Err(error) = manager.run_worker() {
                         error!(error:% = error; "Encountered error in socket worker");

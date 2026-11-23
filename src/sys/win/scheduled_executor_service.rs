@@ -255,7 +255,7 @@ mod tests {
     }
 
     fn manager() -> ScheduledExecutorService {
-        ScheduledExecutorService::new(Arc::new(CompletionService::new().unwrap()), 64)
+        ScheduledExecutorService::new(Arc::new(CompletionService::new().unwrap()), std::sync::mpsc::channel().0, 64)
     }
 
     fn socket_manager<F>(configure: F) -> SocketManager
@@ -396,8 +396,8 @@ mod tests {
     fn connect_timeout() {
         let socket_manager = socket_manager(|builder| builder.set_connect_timeout(Duration::from_millis(50)));
         let address = listener().local_addr().unwrap();
-        let channel = SocketChannel::connect(socket::client(&address).unwrap(), address, socket_manager);
         let mut manager = manager();
+        let channel = SocketChannel::connect(socket::client(&address).unwrap(), address, socket_manager);
         manager.register(Box::new(channel)).unwrap();
         assert_eq!(manager.sockets.len(), 1);
 

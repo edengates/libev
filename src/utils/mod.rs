@@ -16,6 +16,7 @@
 
 //! Module which contains all utilities for the libev library.
 //! These are used by libev itself and can also be useful for the library user!
+pub mod cache;
 pub mod concurrent;
 pub(crate) mod config;
 pub(crate) mod buffer;

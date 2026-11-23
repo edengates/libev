@@ -15,9 +15,12 @@
  */
 
 use crate::SocketManager;
+use crate::entities::channel::concrete::ThreadChannel;
+use crate::entities::channel::middleman::MessageChannel;
 use crate::utils::{EventManager, EventQueue};
 use crate::utils::Buffer;
 use bytes::BytesMut;
+use std::any::Any;
 use std::cell::RefCell;
 use std::io;
 use std::rc::Rc;
@@ -49,14 +52,21 @@ pub trait Sink<T> {
 pub struct BufferedSink {
     socket_manager: SocketManager,
     buffer: Rc<RefCell<Buffer>>,
+    thread_channel: ThreadChannel,
     events: EventQueue,
 }
 
 impl BufferedSink {
-    pub(crate) fn new(socket_manager: &SocketManager, buffer: &Rc<RefCell<Buffer>>, events: &EventQueue) -> Rc<Self> {
+    pub(crate) fn new(
+        socket_manager: &SocketManager,
+        buffer: &Rc<RefCell<Buffer>>,
+        thread_channel: &ThreadChannel,
+        events: &EventQueue,
+    ) -> Rc<Self> {
         Rc::new(Self {
             socket_manager: socket_manager.clone(),
             buffer: Rc::clone(buffer),
+            thread_channel: thread_channel.at_position(0),
             events: Rc::clone(events),
         })
     }
@@ -87,6 +97,24 @@ impl EventManager for Rc<BufferedSink> {
 
     fn channel(&self) -> Rc<dyn Sink<BytesMut>> {
         Rc::clone(self) as Rc<dyn Sink<BytesMut>>
+    }
+
+    fn position(&self) -> usize {
+        0
+    }
+
+    fn channels(&self, channels: &mut Vec<Box<dyn Any>>) {
+        channels.push(Box::new(MessageChannel::new(
+            self.socket_manager.clone(),
+            Rc::clone(&self.buffer),
+            self.thread_channel.clone(),
+            Rc::clone(&self.events),
+            self.channel(),
+        )));
+    }
+
+    fn thread_channel(&self) -> Box<dyn Any + Send + Sync> {
+        Box::new(self.thread_channel.clone())
     }
 
     async fn handle(&mut self) -> io::Result<bool> {
