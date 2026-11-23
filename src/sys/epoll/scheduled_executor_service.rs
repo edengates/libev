@@ -106,7 +106,8 @@ mod tests {
 
     fn manager() -> ScheduledExecutorService {
         let port = Arc::new(crate::handle::epoll::CompletionService::new_factory()(64).unwrap());
-        ScheduledExecutorService::new(port, mpsc::channel().0, 64)
+        let dispatcher = crate::utils::concurrent::Dispatcher::new(&port).0;
+        ScheduledExecutorService::new(port, dispatcher, 64)
     }
 
     #[test]

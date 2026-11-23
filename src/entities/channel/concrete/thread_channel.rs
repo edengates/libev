@@ -16,14 +16,12 @@
 
 use crate::entities::ISnowflake;
 use crate::entities::channel::middleman::MessageChannel;
-use crate::handle::CompletionService;
 use crate::requests::sockactions::ThreadMessageCreateAction;
-use crate::utils::concurrent::{DISPATCH, ScheduledExecutorService, Task};
+use crate::utils::concurrent::{Dispatcher, ScheduledExecutorService};
 use bytes::BytesMut;
 use std::io;
 use std::marker::PhantomData;
-use std::sync::Arc;
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc;
 
 /// A [`MessageChannel`] that can be shared with other threads.
 ///
@@ -33,8 +31,7 @@ use std::sync::mpsc::{self, Sender};
 pub struct ThreadChannel<N = BytesMut, P = BytesMut> {
     id: u64,
     position: usize,
-    sender: Sender<Task>,
-    port: Arc<CompletionService>,
+    dispatcher: Dispatcher,
     marker: PhantomData<fn() -> (N, P)>,
 }
 
@@ -43,26 +40,24 @@ impl<N, P> Clone for ThreadChannel<N, P> {
         Self {
             id: self.id,
             position: self.position,
-            sender: self.sender.clone(),
-            port: Arc::clone(&self.port),
+            dispatcher: self.dispatcher.clone(),
             marker: PhantomData,
         }
     }
 }
 
 impl<N, P> ThreadChannel<N, P> {
-    pub(crate) fn new(id: u64, position: usize, sender: Sender<Task>, port: Arc<CompletionService>) -> Self {
+    pub(crate) fn new(id: u64, position: usize, dispatcher: Dispatcher) -> Self {
         Self {
             id,
             position,
-            sender,
-            port,
+            dispatcher,
             marker: PhantomData,
         }
     }
 
     pub(crate) fn at_position<A, B>(&self, position: usize) -> ThreadChannel<A, B> {
-        ThreadChannel::new(self.id, position, self.sender.clone(), Arc::clone(&self.port))
+        ThreadChannel::new(self.id, position, self.dispatcher.clone())
     }
 }
 
@@ -137,7 +132,7 @@ impl<N: 'static, P: Send + 'static> ThreadChannel<N, P> {
         T: Send + 'static,
         F: FnOnce(&mut MessageChannel<N, P>) -> io::Result<T> + Send + 'static,
     {
-        if ScheduledExecutorService::is_current(&self.port) {
+        if ScheduledExecutorService::is_current(self.dispatcher.port()) {
             return Err(io::ErrorKind::Deadlock.into());
         }
         let (sender, receiver) = mpsc::sync_channel(1);
@@ -147,12 +142,10 @@ impl<N: 'static, P: Send + 'static> ThreadChannel<N, P> {
         receiver.recv().map_err(|_| io::Error::from(io::ErrorKind::NotConnected))?
     }
 
-    fn execute<F: FnOnce(&mut MessageChannel<N, P>) + Send + 'static>(&self, action: F) -> io::Result<()> {
+    pub(crate) fn execute<F: FnOnce(&mut MessageChannel<N, P>) + Send + 'static>(&self, action: F) -> io::Result<()> {
         let (id, position) = (self.id, self.position);
-        self.sender
-            .send(Box::new(move |manager| manager.execute_channel(id, position, action)))
-            .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))?;
-        self.port.wakeup(DISPATCH)
+        self.dispatcher
+            .dispatch(Box::new(move |manager| manager.execute_channel(id, position, action)))
     }
 }
 
