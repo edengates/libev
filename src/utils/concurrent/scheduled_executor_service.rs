@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+use crate::entities::channel::concrete::ThreadChannel;
+use crate::entities::channel::middleman::MessageChannel;
+use crate::entities::channel::mixin::middleman::MessageChannelMixin;
+use crate::entities::snowflake::{EPOCH, TIMESTAMP_OFFSET};
 use crate::handle::Channel;
 use crate::handle::{EventArray, CompletionService};
 use crate::utils::concurrent::ThreadWaker;
@@ -22,22 +26,60 @@ use futures_core::future::LocalBoxFuture;
 use crate::utils::concurrent::scheduled_thread_pool_executor::DelayedWorkQueue;
 use bytes::BytesMut;
 use log::{debug, error, warn};
+use std::cell::RefCell;
 use std::io;
 use std::mem;
 use std::panic::{self, AssertUnwindSafe};
+use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::Sender;
 use std::task::Waker;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 pub type Task = Box<dyn FnOnce(&mut ScheduledExecutorService) + Send>;
 
 pub const DISPATCH: usize = 0;
 pub const SHUTDOWN: usize = 1;
 
+static WORKERS: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    static WORKER: RefCell<Option<Worker>> = const { RefCell::new(None) };
+}
+
+struct Worker {
+    sender: Sender<Task>,
+    port: Arc<CompletionService>,
+    id: u64,
+    timestamp: u64,
+    increment: u64,
+}
+
+impl Worker {
+    fn snowflake(&mut self) -> u64 {
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_millis() as u64)
+            .saturating_sub(EPOCH);
+        if timestamp > self.timestamp {
+            self.timestamp = timestamp;
+            self.increment = 0;
+        } else if self.increment == 0xFFF {
+            self.timestamp += 1;
+            self.increment = 0;
+        } else {
+            self.increment += 1;
+        }
+        self.timestamp << TIMESTAMP_OFFSET | self.id << 12 | self.increment
+    }
+}
+
 /// Runs the sockets of one [`ExecutorCompletionService`](crate::utils::concurrent::ExecutorCompletionService) on its thread.
 pub struct ScheduledExecutorService {
     pub(crate) port: Arc<CompletionService>,
     pub(crate) sockets: FxHashMap<usize, Box<dyn Channel>>,
+    channels: FxHashMap<u64, (usize, Rc<MessageChannelMixin>)>,
     sequence: usize,
     thread_waker: Option<Arc<ThreadWaker>>,
     pub(crate) socket_id: usize,
@@ -49,11 +91,19 @@ pub struct ScheduledExecutorService {
 }
 
 impl ScheduledExecutorService {
-    pub(crate) fn new(port: Arc<CompletionService>, capacity: usize) -> Self {
+    pub(crate) fn new(port: Arc<CompletionService>, sender: Sender<Task>, capacity: usize) -> Self {
+        WORKER.set(Some(Worker {
+            sender,
+            port: Arc::clone(&port),
+            id: WORKERS.fetch_add(1, Ordering::Relaxed) & 0x3FF,
+            timestamp: 0,
+            increment: 0,
+        }));
         Self {
             array: EventArray::new(&port, capacity),
             port,
             sockets: FxHashMap::default(),
+            channels: FxHashMap::default(),
             sequence: 2,
             thread_waker: None,
             socket_id: 0,
@@ -62,6 +112,48 @@ impl ScheduledExecutorService {
             is_shutdown: false,
             queue: DelayedWorkQueue::new(),
         }
+    }
+
+    /// Creates the [`ThreadChannel`] of a new channel on the current thread.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no [`ScheduledExecutorService`] was created on the current thread.
+    pub(crate) fn thread_channel() -> ThreadChannel {
+        WORKER.with_borrow_mut(|worker| {
+            let worker = worker.as_mut().unwrap();
+            ThreadChannel::new(worker.snowflake(), 0, worker.sender.clone(), Arc::clone(&worker.port))
+        })
+    }
+
+    pub(crate) fn is_current(port: &Arc<CompletionService>) -> bool {
+        WORKER.with_borrow(|worker| worker.as_ref().is_some_and(|worker| Arc::ptr_eq(&worker.port, port)))
+    }
+
+    pub(crate) fn add_channel(&mut self, id: u64, channel: &Rc<MessageChannelMixin>) {
+        self.channels.insert(id, (self.socket_id, Rc::clone(channel)));
+    }
+
+    pub(crate) fn remove_channel(&mut self, id: u64) {
+        self.channels.remove(&id);
+    }
+
+    pub(crate) fn execute_channel<N, P, F>(&mut self, id: u64, position: usize, action: F)
+    where
+        N: 'static,
+        P: 'static,
+        F: FnOnce(&mut MessageChannel<N, P>),
+    {
+        let Some((key, channel)) = self.channels.get(&id).map(|(key, channel)| (*key, Rc::clone(channel))) else {
+            return;
+        };
+        if let Some(channel) = channel.channels().borrow_mut().get_mut(position).and_then(|channel| channel.downcast_mut()) {
+            action(channel);
+        }
+        self.handle_event(key, |handle, manager| {
+            channel.wake(manager);
+            matches!(handle.execute(manager), Ok(true))
+        });
     }
 
     pub(crate) fn shutdown(&mut self, timeout: Duration) {
@@ -225,6 +317,7 @@ impl ScheduledExecutorService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entities::ISnowflake;
     use crate::handle::event::Event;
     use std::net::TcpListener;
     #[cfg(unix)]
@@ -261,12 +354,13 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     fn manager() -> ScheduledExecutorService {
-        ScheduledExecutorService::new(Arc::new(crate::handle::CompletionService::new_factory()(64).unwrap()), 64)
+        let port = Arc::new(crate::handle::CompletionService::new_factory()(64).unwrap());
+        ScheduledExecutorService::new(port, std::sync::mpsc::channel().0, 64)
     }
 
     #[cfg(any(windows, target_os = "macos", target_os = "freebsd"))]
     fn manager() -> ScheduledExecutorService {
-        ScheduledExecutorService::new(Arc::new(CompletionService::new().unwrap()), 64)
+        ScheduledExecutorService::new(Arc::new(CompletionService::new().unwrap()), std::sync::mpsc::channel().0, 64)
     }
 
     fn channel(active: bool) -> Box<HeartbeatChannel> {
@@ -284,6 +378,19 @@ mod tests {
         manager.register(channel(false)).unwrap();
         assert_eq!(manager.queue.len(), 1);
         assert_eq!(manager.sockets.len(), 1);
+    }
+
+    #[test]
+    fn thread_channel() {
+        let _manager = manager();
+        let ids: Vec<u64> = (0..10_000).map(|_| ScheduledExecutorService::thread_channel().id()).collect();
+        assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
+        let worker = |id: u64| (id >> 12) & 0x3FF;
+        assert!(ids.iter().all(|&id| worker(id) == worker(ids[0])));
+        let time = SystemTime::UNIX_EPOCH + Duration::from_millis((ids[0] >> TIMESTAMP_OFFSET) + EPOCH);
+        assert!(SystemTime::now().duration_since(time).unwrap() < Duration::from_secs(5));
+        let _manager = manager();
+        assert_ne!(worker(ScheduledExecutorService::thread_channel().id()), worker(ids[0]));
     }
 
     #[test]

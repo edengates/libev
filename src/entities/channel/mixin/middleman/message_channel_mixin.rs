@@ -15,6 +15,8 @@
  */
 
 use crate::SocketManager;
+use crate::entities::ISnowflake;
+use crate::entities::channel::concrete::ThreadChannel;
 use crate::events::channel::update::ChannelUpdateSlowmodeEvent;
 use crate::events::channel::{ChannelDisconnectEvent, ChannelReadyEvent, ChannelTimeoutEvent};
 use crate::events::message::MessageReceivedEvent;
@@ -23,6 +25,7 @@ use crate::utils::{EventQueue, EventManagerProxy};
 use crate::utils::concurrent::ScheduledExecutorService;
 use crate::utils::Buffer;
 use bytes::BytesMut;
+use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Instant;
@@ -31,7 +34,10 @@ use std::time::Instant;
 pub struct MessageChannelMixin {
     socket_manager: SocketManager,
     buffer: Rc<RefCell<Buffer>>,
+    thread_channel: ThreadChannel,
     events: EventQueue,
+    channels: RefCell<Vec<Box<dyn Any>>>,
+    top: Cell<Option<Box<dyn Any + Send + Sync>>>,
     proxy: Rc<dyn EventManagerProxy>,
     is_connected: Cell<bool>,
     is_ready: Cell<bool>,
@@ -41,12 +47,16 @@ pub struct MessageChannelMixin {
 impl MessageChannelMixin {
     pub(crate) fn new(socket_manager: SocketManager) -> Self {
         let buffer = Rc::default();
+        let thread_channel = ScheduledExecutorService::thread_channel();
         let events = EventQueue::default();
-        let proxy = socket_manager.proxy(&buffer, &events);
+        let proxy = socket_manager.proxy(&buffer, &thread_channel, &events);
         Self {
             socket_manager,
             buffer,
+            thread_channel,
             events,
+            channels: RefCell::new(proxy.channels()),
+            top: Cell::new(Some(proxy.thread_channel())),
             proxy,
             is_connected: Cell::new(false),
             is_ready: Cell::new(false),
@@ -60,6 +70,10 @@ impl MessageChannelMixin {
 
     pub(crate) fn buffer(&self) -> &RefCell<Buffer> {
         &self.buffer
+    }
+
+    pub(crate) fn channels(&self) -> &RefCell<Vec<Box<dyn Any>>> {
+        &self.channels
     }
 
     pub(crate) fn is_connected(&self) -> bool {
@@ -76,6 +90,10 @@ impl MessageChannelMixin {
 
     pub(crate) fn ready(self: &Rc<Self>, manager: &mut ScheduledExecutorService) {
         self.is_ready.set(true);
+        manager.add_channel(self.thread_channel.id(), self);
+        if let Some(top) = self.top.take() {
+            self.socket_manager.channel_cache().add(self.thread_channel.id(), top);
+        }
         self.handle_event(manager, Box::new(ChannelReadyEvent));
         if let Some(timeout) = self.socket_manager.afk_timeout() {
             manager.setup_keep_alive(timeout);
@@ -122,6 +140,8 @@ impl MessageChannelMixin {
         if !self.is_ready() {
             return;
         }
+        manager.remove_channel(self.thread_channel.id());
+        self.socket_manager.channel_cache().remove(self.thread_channel.id());
         self.buffer.borrow_mut().close();
         self.handle_event(manager, Box::new(ChannelDisconnectEvent));
         if self.is_connected() {
@@ -131,6 +151,10 @@ impl MessageChannelMixin {
 
     fn handle_event(self: &Rc<Self>, manager: &mut ScheduledExecutorService, event: Box<dyn Event>) {
         self.events.borrow_mut().push_back(event);
+        self.wake(manager);
+    }
+
+    pub(crate) fn wake(self: &Rc<Self>, manager: &mut ScheduledExecutorService) {
         if !self.is_connected() {
             self.connect(true);
             manager.enqueue(Rc::clone(&self.proxy).handle(Rc::clone(self)));

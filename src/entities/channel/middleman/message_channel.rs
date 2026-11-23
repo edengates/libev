@@ -15,6 +15,8 @@
  */
 
 use crate::SocketManager;
+use crate::entities::ISnowflake;
+use crate::entities::channel::concrete::ThreadChannel;
 use crate::events::channel::update::ChannelUpdateSlowmodeEvent;
 use crate::events::channel::{ChannelDisconnectEvent, ChannelReadyEvent, ChannelTimeoutEvent};
 use crate::events::message::MessageReceivedEvent;
@@ -43,6 +45,7 @@ use std::sync::{Arc, RwLock};
 pub struct MessageChannel<N = BytesMut, P = BytesMut> {
     socket_manager: SocketManager,
     buffer: Rc<RefCell<Buffer>>,
+    thread_channel: ThreadChannel<N, P>,
     next: EventQueue,
     parent: Rc<dyn Sink<P>>,
     marker: PhantomData<N>,
@@ -53,6 +56,7 @@ impl<N, P> Clone for MessageChannel<N, P> {
         Self {
             socket_manager: self.socket_manager.clone(),
             buffer: Rc::clone(&self.buffer),
+            thread_channel: self.thread_channel.clone(),
             next: Rc::clone(&self.next),
             parent: Rc::clone(&self.parent),
             marker: PhantomData,
@@ -64,12 +68,14 @@ impl<N, P> MessageChannel<N, P> {
     pub(crate) fn new(
         socket_manager: SocketManager,
         buffer: Rc<RefCell<Buffer>>,
+        thread_channel: ThreadChannel<N, P>,
         next: EventQueue,
         parent: Rc<dyn Sink<P>>,
     ) -> Self {
         Self {
             socket_manager,
             buffer,
+            thread_channel,
             next,
             parent,
             marker: PhantomData,
@@ -79,6 +85,13 @@ impl<N, P> MessageChannel<N, P> {
     /// Returns the [`SocketManager`] instance of this channel.
     pub fn socket_manager(&self) -> &SocketManager {
         &self.socket_manager
+    }
+
+    /// Returns the [`ThreadChannel`] of this channel.
+    ///
+    /// The [`ThreadChannel`] can be shared with other threads to send messages to this channel.
+    pub fn thread_channel(&self) -> &ThreadChannel<N, P> {
+        &self.thread_channel
     }
 
     /// The data mappings to use in [`SocketManager`], shared by all of its channels.
@@ -196,6 +209,12 @@ impl<N, P> MessageChannel<N, P> {
     }
 }
 
+impl<N, P> ISnowflake for MessageChannel<N, P> {
+    fn id(&self) -> u64 {
+        self.thread_channel.id()
+    }
+}
+
 impl<N, P> Sink<P> for MessageChannel<N, P> {
     fn write(&self, message: P) -> io::Result<()> {
         // If the buffer is shutdown we know the channel was closed and so
@@ -239,10 +258,13 @@ mod tests {
             .build()
             .unwrap();
         let buffer = Rc::default();
-        let head = BufferedSink::new(&socket_manager, &buffer, &EventQueue::default());
+        let port = std::sync::Arc::new(crate::handle::CompletionService::new_factory()(8).unwrap());
+        let thread_channel = ThreadChannel::new(0, 0, std::sync::mpsc::channel().0, port);
+        let head = BufferedSink::new(&socket_manager, &buffer, &thread_channel, &EventQueue::default());
         let mut channel: MessageChannel = MessageChannel::new(
             socket_manager,
             Rc::clone(&buffer),
+            thread_channel,
             EventQueue::default(),
             head.channel(),
         );

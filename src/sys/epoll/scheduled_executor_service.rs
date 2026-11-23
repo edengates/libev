@@ -104,9 +104,14 @@ mod tests {
         }
     }
 
+    fn manager() -> ScheduledExecutorService {
+        let port = Arc::new(crate::handle::epoll::CompletionService::new_factory()(64).unwrap());
+        ScheduledExecutorService::new(port, mpsc::channel().0, 64)
+    }
+
     #[test]
     fn submit() {
-        let mut manager = ScheduledExecutorService::new(Arc::new(crate::handle::epoll::CompletionService::new_factory()(64).unwrap()), 64);
+        let mut manager = manager();
         let (sender, receiver) = mpsc::channel();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -129,7 +134,7 @@ mod tests {
             .unwrap();
         let socket = socket::client(&"127.0.0.1:0".parse().unwrap()).unwrap();
         let unbound = TcpListener::from(OwnedFd::from(socket));
-        let mut manager = ScheduledExecutorService::new(Arc::new(crate::handle::epoll::CompletionService::new_factory()(64).unwrap()), 64);
+        let mut manager = manager();
         manager.register(Box::new(ServerSocketChannel::new(unbound, socket_manager))).unwrap();
         manager.schedule(Duration::from_secs(5), |_| ());
 
@@ -153,8 +158,8 @@ mod tests {
             .unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
+        let mut manager = manager();
         let channel = SocketChannel::connect(socket::client(&address).unwrap(), address, socket_manager);
-        let mut manager = ScheduledExecutorService::new(Arc::new(crate::handle::epoll::CompletionService::new_factory()(64).unwrap()), 64);
         manager.register(Box::new(channel)).unwrap();
         assert_eq!(manager.sockets.len(), 1);
 

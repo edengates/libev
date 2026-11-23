@@ -19,3 +19,5 @@
 //! This module contains all supported entities as structs. They contain information about the specific entity and
 //! have operations to interact with them.
 pub mod channel;
+pub(crate) mod snowflake;
+pub use snowflake::ISnowflake;

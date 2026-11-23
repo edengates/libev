@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
+use crate::entities::channel::concrete::ThreadChannel;
 use crate::utils::concurrent::ScheduledThreadPoolExecutor;
 use crate::utils::{EventQueue, EventManagerProvider, EventManagerProxy};
 use crate::handle::{self, socket};
 use crate::utils::Buffer;
+use crate::utils::cache::ChannelCacheView;
 use crate::utils::config::{SocketConfig, ThreadingConfig};
 use std::any::Any;
 use std::cell::RefCell;
@@ -43,6 +45,7 @@ struct SocketManagerImpl {
     socket_config: SocketConfig,
     provider: EventManagerProvider,
     context_map: RwLock<HashMap<String, Arc<dyn Any + Send + Sync>>>,
+    channel_cache: ChannelCacheView,
 }
 
 impl SocketManager {
@@ -57,6 +60,7 @@ impl SocketManager {
                 socket_config,
                 provider,
                 context_map: RwLock::default(),
+                channel_cache: ChannelCacheView::default(),
             }),
         }
     }
@@ -166,12 +170,34 @@ impl SocketManager {
         &self.inner.context_map
     }
 
+    /// [`ChannelCacheView`] of all cached channels of this [`SocketManager`].
+    pub fn channel_cache(&self) -> &ChannelCacheView {
+        &self.inner.channel_cache
+    }
+
+    /// Gets all channels of this [`SocketManager`].
+    ///
+    /// This copies the backing store into a list. This means every call creates a new list with O(n) complexity. It is
+    /// recommended to store this into a local variable or use [`channel_cache`](Self::channel_cache) and use its more
+    /// efficient versions of handling these values.
+    pub fn channels<N: 'static, P: 'static>(&self) -> Vec<ThreadChannel<N, P>> {
+        self.inner.channel_cache.to_vec()
+    }
+
+    /// Gets a channel that has the same id as the one provided.
+    ///
+    /// If there is no channel with an id that matches the provided one, then this returns `None`.
+    pub fn get_channel_by_id<N: 'static, P: 'static>(&self, id: u64) -> Option<ThreadChannel<N, P>> {
+        self.inner.channel_cache.get_element_by_id(id)
+    }
+
     pub(crate) fn proxy(
         &self,
         buffer: &Rc<RefCell<Buffer>>,
+        thread_channel: &ThreadChannel,
         inbound: &EventQueue,
     ) -> Rc<dyn EventManagerProxy> {
-        (self.inner.provider)(self, buffer, inbound)
+        (self.inner.provider)(self, buffer, thread_channel, inbound)
     }
 
     /// Creates a new socket, which will be bound to the specified address, and returns its local address.

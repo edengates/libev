@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn echo() {
         let port = crate::handle::uring::CompletionService::new_factory()(64).unwrap();
-        let mut manager = ScheduledExecutorService::new(Arc::new(port), 64);
+        let mut manager = ScheduledExecutorService::new(Arc::new(port), std::sync::mpsc::channel().0, 64);
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         manager.register(Box::new(AcceptChannel { listener })).unwrap();

@@ -16,6 +16,8 @@
 
 use bytes::BytesMut;
 use libev::DefaultSocketManagerBuilder;
+use libev::entities::ISnowflake;
+use libev::entities::channel::concrete::ThreadChannel;
 use libev::entities::channel::middleman::MessageChannel;
 use libev::hooks::ListenerAdapter;
 use libev::requests::sockactions::SocketAction;
@@ -499,6 +501,43 @@ impl ListenerAdapter for GuildReadyAdapter {
     }
 }
 
+#[derive(Clone)]
+struct ThreadChannelAdapter {
+    callback: Sender<ThreadChannel>,
+}
+
+impl ListenerAdapter for ThreadChannelAdapter {
+    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+        self.callback.send(channel.thread_channel().clone()).ok();
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct ThreadTextAdapter {
+    callback: Sender<ThreadChannel<String, String>>,
+}
+
+impl ListenerAdapter<String, String> for ThreadTextAdapter {
+    async fn on_ready(&mut self, channel: &mut MessageChannel<String, String>) -> io::Result<()> {
+        self.callback.send(channel.thread_channel().clone()).ok();
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct DeadLockAdapter {
+    callback: Sender<io::Result<()>>,
+}
+
+impl ListenerAdapter for DeadLockAdapter {
+    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+        let data = channel.thread_channel().send_message(BytesMut::from(&b"ping"[..])).complete();
+        self.callback.send(data).ok();
+        Ok(())
+    }
+}
+
 fn shard_manager(shards_total: usize) -> ScheduledThreadPoolExecutor {
     ScheduledThreadPoolExecutor::new(shards_total, 64).unwrap()
 }
@@ -676,6 +715,106 @@ fn is_locked() {
     assert!(event());
     client.read_exact(&mut vec![0; 1024 * 1024]).unwrap();
     assert!(!event());
+}
+
+#[test]
+fn thread_channel() {
+    let (sender, receiver) = mpsc::channel();
+    let server = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .add_event_listener(ThreadChannelAdapter { callback: sender })
+        .build()
+        .unwrap();
+    let address = server.bind("127.0.0.1:0").unwrap();
+
+    let mut client = TcpStream::connect(address).unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let channel = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    thread::spawn(move || {
+        channel.write(BytesMut::from(&b"pi"[..])).unwrap();
+        channel.flush().unwrap();
+        let sent = channel.send_message(BytesMut::from(&b"ng"[..])).map(|_| "sent").complete();
+        assert_eq!(sent.unwrap(), "sent");
+        channel.set_self_deafened(true).unwrap();
+        channel.close().unwrap();
+        assert_eq!(channel.write(BytesMut::from(&b"pong"[..])).unwrap_err().kind(), io::ErrorKind::NotConnected);
+    })
+    .join()
+    .unwrap();
+
+    let mut received = Vec::new();
+    client.read_to_end(&mut received).unwrap();
+    assert_eq!(received, b"ping");
+}
+
+#[test]
+fn deadlock() {
+    let (sender, receiver) = mpsc::channel();
+    let server = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .add_event_listener(DeadLockAdapter { callback: sender })
+        .build()
+        .unwrap();
+    let address = server.bind("127.0.0.1:0").unwrap();
+
+    let _client = TcpStream::connect(address).unwrap();
+    let data = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(data.unwrap_err().kind(), io::ErrorKind::Deadlock);
+}
+
+#[test]
+fn thread_pipeline() {
+    let (sender, receiver) = mpsc::channel();
+    let server = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .add_event_listener(StringHandler)
+        .add_event_listener(ThreadTextAdapter { callback: sender })
+        .build()
+        .unwrap();
+    let address = server.bind("127.0.0.1:0").unwrap();
+
+    let mut client = TcpStream::connect(address).unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let channel = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(server.get_channel_by_id::<String, String>(channel.id()).is_some());
+    thread::spawn(move || {
+        channel.send_message(String::from("ping")).complete().unwrap();
+        channel.close().unwrap();
+    })
+    .join()
+    .unwrap();
+
+    let mut received = Vec::new();
+    client.read_to_end(&mut received).unwrap();
+    assert_eq!(received, b"ping");
+}
+
+#[test]
+fn channel_cache() {
+    let (sender, receiver) = mpsc::channel();
+    let server = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .add_event_listener(ThreadChannelAdapter { callback: sender })
+        .build()
+        .unwrap();
+    let address = server.bind("127.0.0.1:0").unwrap();
+    assert!(server.channel_cache().is_empty());
+
+    let mut client = TcpStream::connect(address).unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let channel = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(server.channel_cache().len(), 1);
+    assert_eq!(server.channels::<BytesMut, BytesMut>().len(), 1);
+    assert!(server.get_channel_by_id::<BytesMut, BytesMut>(channel.id()).is_some());
+    assert!(server.get_channel_by_id::<String, String>(channel.id()).is_none());
+
+    channel.close().unwrap();
+    client.read_to_end(&mut Vec::new()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !server.channel_cache().is_empty() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert!(server.get_channel_by_id::<BytesMut, BytesMut>(channel.id()).is_none());
 }
 
 #[test]
