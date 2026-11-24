@@ -39,6 +39,8 @@ pub struct CompletionService {
     event_value: Box<UnsafeCell<u64>>,
     is_reading: AtomicBool,
     is_shutdown: AtomicBool,
+    is_deferred: bool,
+    is_disabled: bool,
 }
 
 unsafe impl Send for CompletionService {}
@@ -47,11 +49,25 @@ unsafe impl Sync for CompletionService {}
 impl CompletionService {
     /// Returns a new factory that creates `io_uring` instances.
     pub(crate) fn new_factory() -> fn(u32) -> io::Result<crate::handle::CompletionService> {
-        |entries| Self::new(entries).map(crate::handle::CompletionService::IoUring)
+        |entries| Self::build(entries, true).map(crate::handle::CompletionService::IoUring)
     }
 
+    #[cfg(test)]
     pub(crate) fn new(entries: u32) -> io::Result<Self> {
-        let ring = IoUring::new(entries)?;
+        Self::build(entries, false)
+    }
+
+    fn build(entries: u32, is_disabled: bool) -> io::Result<Self> {
+        let mut builder = IoUring::builder();
+        builder.setup_single_issuer().setup_defer_taskrun();
+        if is_disabled {
+            builder.setup_r_disabled();
+        }
+        let (ring, is_deferred) = match builder.build(entries) {
+            Ok(ring) => (ring, true),
+            Err(error) if error.kind() == io::ErrorKind::InvalidInput => (IoUring::new(entries)?, false),
+            Err(error) => return Err(error),
+        };
         probe(&ring.submitter())?;
         Ok(Self {
             ring,
@@ -59,7 +75,20 @@ impl CompletionService {
             event_value: Box::new(UnsafeCell::new(0)),
             is_reading: AtomicBool::new(false),
             is_shutdown: AtomicBool::new(false),
+            is_deferred,
+            is_disabled: is_disabled && is_deferred,
         })
+    }
+
+    pub(crate) fn enable(&self) -> io::Result<()> {
+        if self.is_disabled {
+            return self.ring.submitter().register_enable_rings();
+        }
+        Ok(())
+    }
+
+    pub(crate) fn is_multishot_enabled(&self) -> bool {
+        self.is_deferred
     }
 
     pub(crate) fn wakeup(&self, id: usize) -> io::Result<()> {
@@ -336,6 +365,7 @@ mod tests {
         let handle::CompletionService::IoUring(manager) = &*port else {
             unreachable!()
         };
+        manager.enable().unwrap();
         let mut buffer_ring = BufferRing::new(&port, 2, 16).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();

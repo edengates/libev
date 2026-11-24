@@ -48,7 +48,7 @@ thread_local! {
 }
 
 struct Worker {
-    dispatcher: Dispatcher,
+    dispatcher: Arc<Dispatcher>,
     id: u64,
     timestamp: u64,
     increment: u64,
@@ -91,7 +91,7 @@ pub struct ScheduledExecutorService {
 impl ScheduledExecutorService {
     pub(crate) fn new(port: Arc<CompletionService>, dispatcher: Dispatcher, capacity: usize) -> Self {
         WORKER.set(Some(Worker {
-            dispatcher,
+            dispatcher: Arc::new(dispatcher),
             id: WORKERS.fetch_add(1, Ordering::Relaxed) & 0x3FF,
             timestamp: 0,
             increment: 0,
@@ -119,7 +119,7 @@ impl ScheduledExecutorService {
     pub(crate) fn thread_channel() -> ThreadChannel {
         WORKER.with_borrow_mut(|worker| {
             let worker = worker.as_mut().unwrap();
-            ThreadChannel::new(worker.snowflake(), 0, worker.dispatcher.clone())
+            ThreadChannel::new(worker.snowflake(), 0, Arc::clone(&worker.dispatcher))
         })
     }
 

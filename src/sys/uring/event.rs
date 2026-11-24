@@ -20,15 +20,21 @@ pub struct Event {
     opcode: u8,
     res: i32,
     buffer: Option<BytesMut>,
+    more: bool,
 }
 
 impl Event {
-    pub(crate) fn new(opcode: u8, res: i32, buffer: Option<BytesMut>) -> Self {
+    pub(crate) fn new(opcode: u8, res: i32, buffer: Option<BytesMut>, more: bool) -> Self {
         Self {
             opcode,
             res,
             buffer,
+            more,
         }
+    }
+
+    pub(crate) fn more(&self) -> bool {
+        self.more
     }
 
     pub(crate) fn opcode(&self) -> u8 {

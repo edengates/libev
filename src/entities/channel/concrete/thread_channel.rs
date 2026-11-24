@@ -21,7 +21,7 @@ use crate::utils::concurrent::{Dispatcher, ScheduledExecutorService};
 use bytes::BytesMut;
 use std::io;
 use std::marker::PhantomData;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 
 /// A [`MessageChannel`] that can be shared with other threads.
 ///
@@ -31,7 +31,7 @@ use std::sync::mpsc;
 pub struct ThreadChannel<N = BytesMut, P = BytesMut> {
     id: u64,
     position: usize,
-    dispatcher: Dispatcher,
+    dispatcher: Arc<Dispatcher>,
     marker: PhantomData<fn() -> (N, P)>,
 }
 
@@ -40,14 +40,14 @@ impl<N, P> Clone for ThreadChannel<N, P> {
         Self {
             id: self.id,
             position: self.position,
-            dispatcher: self.dispatcher.clone(),
+            dispatcher: Arc::clone(&self.dispatcher),
             marker: PhantomData,
         }
     }
 }
 
 impl<N, P> ThreadChannel<N, P> {
-    pub(crate) fn new(id: u64, position: usize, dispatcher: Dispatcher) -> Self {
+    pub(crate) fn new(id: u64, position: usize, dispatcher: Arc<Dispatcher>) -> Self {
         Self {
             id,
             position,
@@ -57,7 +57,7 @@ impl<N, P> ThreadChannel<N, P> {
     }
 
     pub(crate) fn at_position<A, B>(&self, position: usize) -> ThreadChannel<A, B> {
-        ThreadChannel::new(self.id, position, self.dispatcher.clone())
+        ThreadChannel::new(self.id, position, Arc::clone(&self.dispatcher))
     }
 }
 

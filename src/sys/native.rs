@@ -138,9 +138,10 @@ mod linux {
     impl EventArray {
         pub(crate) fn new(port: &Arc<CompletionService>, capacity: usize) -> Self {
             let buffer_ring = match &**port {
-                CompletionService::IoUring(_) => {
-                    BufferRing::new(port, capacity.max(2).next_power_of_two() as u16, 16384).ok()
-                }
+                CompletionService::IoUring(ring) => ring
+                    .enable()
+                    .and_then(|_| BufferRing::new(port, capacity.max(2).next_power_of_two() as u16, 16384))
+                    .ok(),
                 CompletionService::Epoll(_) => None,
             };
             Self {

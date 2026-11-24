@@ -82,7 +82,10 @@ fn complete(manager: &mut ScheduledExecutorService, res: i32, flags: u32, user_d
     if key <= SHUTDOWN {
         return;
     }
-    manager.array.response_total -= 1;
+    let more = cqueue::more(flags);
+    if !more {
+        manager.array.response_total -= 1;
+    }
     let buffer = match opcode {
         opcode::Recv::CODE if res > 0 => cqueue::buffer_select(flags).and_then(|bid| {
             manager.array.buffer_ring.as_mut().and_then(|buffer_ring| buffer_ring.use_buffer(bid, res as usize))
@@ -106,7 +109,7 @@ fn complete(manager: &mut ScheduledExecutorService, res: i32, flags: u32, user_d
     let data = if res < 0 {
         Err(io::Error::from_raw_os_error(-res))
     } else {
-        Ok(Event::IoUring(event::Event::new(opcode, res, buffer)))
+        Ok(Event::IoUring(event::Event::new(opcode, res, buffer, more)))
     };
     manager.handle_event(key, |handle, manager| matches!(handle.handle(manager, data), Ok(true)));
 }
@@ -115,14 +118,29 @@ impl ScheduledExecutorService {
     pub(crate) fn read<S: AsRawFd>(&mut self, socket: &S) -> io::Result<()> {
         let port = ring(&self.port)?;
         let buffer_ring = self.array.buffer_ring.as_ref().ok_or(io::ErrorKind::Unsupported)?;
-        let recv = opcode::Recv::new(types::Fd(socket.as_raw_fd()), ptr::null_mut(), 0).buf_group(buffer_ring.group());
-        port.enqueue_sqe(
-            recv.build()
+        let user_data = user_data(self.socket_id, opcode::Recv::CODE);
+        let fd = types::Fd(socket.as_raw_fd());
+        let recv = if port.is_multishot_enabled() {
+            opcode::RecvMulti::new(fd, buffer_ring.group()).build()
+        } else {
+            opcode::Recv::new(fd, ptr::null_mut(), 0)
+                .buf_group(buffer_ring.group())
+                .build()
                 .flags(squeue::Flags::BUFFER_SELECT)
-                .user_data(user_data(self.socket_id, opcode::Recv::CODE)),
-        )?;
+        };
+        port.enqueue_sqe(recv.user_data(user_data))?;
         self.array.response_total += 1;
         Ok(())
+    }
+
+    pub(crate) fn is_multishot_enabled(&self) -> bool {
+        ring(&self.port).is_ok_and(CompletionService::is_multishot_enabled)
+    }
+
+    pub(crate) fn unread(&mut self) -> io::Result<()> {
+        let port = ring(&self.port)?;
+        let cancel = opcode::AsyncCancel2::new(types::CancelBuilder::user_data(user_data(self.socket_id, opcode::Recv::CODE)));
+        port.enqueue_sqe(cancel.build().user_data(user_data(DISPATCH, opcode::AsyncCancel2::CODE)))
     }
 
     pub(crate) fn write<S: AsRawFd>(&mut self, socket: &S, buffers: Vec<BytesMut>) -> io::Result<()> {
@@ -221,11 +239,16 @@ mod tests {
                 return Ok(false);
             };
             match packet.opcode() {
-                opcode::Recv::CODE => match packet.into_body() {
-                    Some(body) => manager.write(&self.stream, vec![body]).map(|_| true),
-                    None => Ok(false),
-                },
-                _ => manager.read(&self.stream).map(|_| true),
+                opcode::Recv::CODE => {
+                    if !packet.more() {
+                        manager.read(&self.stream)?;
+                    }
+                    match packet.into_body() {
+                        Some(body) => manager.write(&self.stream, vec![body]).map(|_| true),
+                        None => Ok(false),
+                    }
+                }
+                _ => Ok(true),
             }
         }
 
