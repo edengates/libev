@@ -18,10 +18,9 @@ use bytes::BytesMut;
 use rustix::io::Errno;
 #[cfg(not(target_os = "macos"))]
 use rustix::net::SocketFlags;
-use socket2::{Domain, SockAddr, SockRef, Socket, TcpKeepalive, Type};
+use socket2::{Domain, SockAddr, SockRef, Socket, Type};
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::time::Duration;
 
 fn new_socket(domain: Domain) -> io::Result<Socket> {
     #[cfg(target_os = "macos")]
@@ -143,34 +142,14 @@ pub(crate) fn receive(stream: &TcpStream, buffer: &mut BytesMut) -> io::Result<u
     }
 }
 
-pub(crate) fn init(
-    stream: &TcpStream,
-    tcp_no_delay: bool,
-    is_keep_alive_enabled: bool,
-    keep_alive: Option<Duration>,
-    close_timeout: Option<Duration>,
-) -> io::Result<()> {
-    if tcp_no_delay {
-        stream.set_nodelay(true)?;
-    }
-    if is_keep_alive_enabled {
-        let socket = SockRef::from(stream);
-        match keep_alive {
-            Some(time) => socket.set_tcp_keepalive(&TcpKeepalive::new().with_time(time))?,
-            None => socket.set_keepalive(true)?,
-        }
-    }
-    if close_timeout.is_some() {
-        SockRef::from(stream).set_linger(close_timeout)?;
-    }
-    Ok(())
-}
+pub(crate) use super::option::init;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use rustix::event::{PollFd, PollFlags, Timespec, poll};
     use std::os::fd::AsFd;
+    use std::time::Duration;
 
     fn await_ready(fd: &impl AsFd, events: PollFlags) {
         let timeout = Timespec { tv_sec: 5, tv_nsec: 0 };
@@ -182,24 +161,9 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
-        super::init(&server, true, true, Some(Duration::from_secs(60)), Some(Duration::from_secs(5))).unwrap();
+        super::init(&server, false, true, Some(Duration::from_secs(60)), None).unwrap();
 
-        assert!(server.nodelay().unwrap());
-        assert!(SockRef::from(&server).keepalive().unwrap());
         assert_eq!(SockRef::from(&server).tcp_keepalive_time().unwrap(), Duration::from_secs(60));
-        assert_eq!(SockRef::from(&server).linger().unwrap(), Some(Duration::from_secs(5)));
-    }
-
-    #[test]
-    fn keep_alive() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        let (server, _) = listener.accept().unwrap();
-        super::init(&server, false, false, Some(Duration::from_secs(60)), None).unwrap();
-        assert!(!SockRef::from(&server).keepalive().unwrap());
-
-        super::init(&server, false, true, None, None).unwrap();
-        assert!(SockRef::from(&server).keepalive().unwrap());
     }
 
     #[test]
