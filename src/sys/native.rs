@@ -42,6 +42,8 @@ pub(crate) mod kqueue;
 pub use kqueue::{CompletionService, EventArray};
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub(crate) use kqueue::event;
+#[path = "option.rs"]
+mod option;
 #[path = "socket.rs"]
 pub(crate) mod socket;
 #[path = "socket_channel.rs"]

@@ -42,6 +42,8 @@ pub(crate) fn set_power_suppressed(is_power_suppressed_enabled: bool) {
     }
 }
 
+#[path = "../option.rs"]
+mod option;
 pub(crate) mod socket;
 pub(crate) mod event;
 mod completion_service;

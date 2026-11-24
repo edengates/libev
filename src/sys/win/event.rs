@@ -36,9 +36,9 @@ pub struct Event {
 
 impl Event {
     pub(crate) const READ: u32 = 1 << 0;
-    pub(crate) const WRITE: u32 = 1 << 2;
-    pub(crate) const CONNECT: u32 = 1 << 3;
-    pub(crate) const ACCEPT: u32 = 1 << 4;
+    pub(crate) const WRITE: u32 = 1 << 1;
+    pub(crate) const CONNECT: u32 = 1 << 2;
+    pub(crate) const ACCEPT: u32 = 1 << 3;
 
     pub(crate) fn new(capacity: usize) -> Box<Self> {
         if capacity == 0 {
@@ -122,15 +122,23 @@ impl Event {
                     call(&[buffer], &mut packet.overlapped)
                 }
                 _ => {
-                    let buffers: Vec<WSABUF> = packet
-                        .buffers
-                        .iter_mut()
-                        .map(|buffer| WSABUF {
-                            len: buffer.len() as u32,
-                            buf: buffer.as_mut_ptr(),
-                        })
-                        .collect();
-                    call(&buffers, &mut packet.overlapped)
+                    let mut chunks = [WSABUF { len: 0, buf: ptr::null_mut() }; 16];
+                    let mut heap = Vec::new();
+                    let count = packet.buffers.len();
+                    let buffers = packet.buffers.iter_mut().map(|buffer| WSABUF {
+                        len: buffer.len() as u32,
+                        buf: buffer.as_mut_ptr(),
+                    });
+                    let buffers: &[WSABUF] = if count <= chunks.len() {
+                        for (chunk, buffer) in chunks.iter_mut().zip(buffers) {
+                            *chunk = buffer;
+                        }
+                        &chunks[..count]
+                    } else {
+                        heap.extend(buffers);
+                        &heap
+                    };
+                    call(buffers, &mut packet.overlapped)
                 }
             }
         };
