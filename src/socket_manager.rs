@@ -135,6 +135,16 @@ impl SocketManager {
         self.inner.socket_config.tcp_no_delay()
     }
 
+    /// Whether the `SO_KEEPALIVE` option is set on each connection.
+    pub fn is_keep_alive_enabled(&self) -> bool {
+        self.inner.socket_config.is_keep_alive_enabled()
+    }
+
+    /// The idle time before the first keepalive probe, or `None` for the value of the operating system.
+    pub fn keep_alive(&self) -> Option<Duration> {
+        self.inner.socket_config.keep_alive()
+    }
+
     /// The `SO_LINGER` time, or `None` if disabled.
     pub fn close_timeout(&self) -> Option<Duration> {
         self.inner.socket_config.close_timeout()

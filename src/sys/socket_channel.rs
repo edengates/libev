@@ -98,7 +98,14 @@ impl SocketChannel {
     }
 
     fn ready(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
-        socket::init(&self.socket, self.channel.socket_manager().tcp_no_delay(), self.channel.socket_manager().close_timeout())?;
+        let socket_manager = self.channel.socket_manager();
+        socket::init(
+            &self.socket,
+            socket_manager.tcp_no_delay(),
+            socket_manager.is_keep_alive_enabled(),
+            socket_manager.keep_alive(),
+            socket_manager.close_timeout(),
+        )?;
         self.channel.ready(manager);
         self.execute(manager)
     }
