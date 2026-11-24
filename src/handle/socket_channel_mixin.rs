@@ -78,7 +78,13 @@ pub(crate) trait SocketChannelMixin: Sized {
     fn ready(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
         let state = self.state();
         let socket_manager = state.channel.socket_manager();
-        socket::init(&state.socket, socket_manager.tcp_no_delay(), socket_manager.close_timeout())?;
+        socket::init(
+            &state.socket,
+            socket_manager.tcp_no_delay(),
+            socket_manager.is_keep_alive_enabled(),
+            socket_manager.keep_alive(),
+            socket_manager.close_timeout(),
+        )?;
         state.channel.ready(manager);
         Channel::execute(self, manager)
     }

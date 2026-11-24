@@ -19,6 +19,8 @@ use std::time::Duration;
 #[derive(Clone)]
 pub struct SocketConfig {
     pub(crate) tcp_no_delay: bool,
+    pub(crate) is_keep_alive_enabled: bool,
+    pub(crate) keep_alive: Option<Duration>,
     pub(crate) close_timeout: Option<Duration>,
     pub(crate) connect_timeout: Duration,
     pub(crate) afk_timeout: Option<Duration>,
@@ -30,6 +32,14 @@ pub struct SocketConfig {
 impl SocketConfig {
     pub fn tcp_no_delay(&self) -> bool {
         self.tcp_no_delay
+    }
+
+    pub fn is_keep_alive_enabled(&self) -> bool {
+        self.is_keep_alive_enabled
+    }
+
+    pub fn keep_alive(&self) -> Option<Duration> {
+        self.keep_alive
     }
 
     pub fn close_timeout(&self) -> Option<Duration> {

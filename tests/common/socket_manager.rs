@@ -1152,6 +1152,8 @@ fn builder() {
         .set_chunk_limit(10)
         .set_packet_limit(13)
         .set_tcp_no_delay(false)
+        .set_keep_alive_enable(true)
+        .set_keep_alive(Duration::from_secs(12))
         .set_close_timeout(Duration::from_secs(9))
         .set_connect_timeout(Duration::from_secs(14))
         .set_afk_timeout(Duration::from_secs(10))
@@ -1171,6 +1173,8 @@ fn builder() {
     assert_eq!(manager.chunk_limit(), 10);
     assert_eq!(manager.packet_limit(), 13);
     assert!(!manager.tcp_no_delay());
+    assert!(manager.is_keep_alive_enabled());
+    assert_eq!(manager.keep_alive(), Some(Duration::from_secs(12)));
     assert_eq!(manager.close_timeout(), Some(Duration::from_secs(9)));
     assert_eq!(manager.connect_timeout(), Duration::from_secs(14));
     assert_eq!(manager.afk_timeout(), Some(Duration::from_secs(10)));

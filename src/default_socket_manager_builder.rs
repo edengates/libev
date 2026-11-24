@@ -51,6 +51,8 @@ pub struct DefaultSocketManagerBuilder<P = Rc<BufferedSink>> {
     packet_limit: usize,
     is_power_suppressed_enabled: bool,
     tcp_no_delay: bool,
+    is_keep_alive_enabled: bool,
+    keep_alive: Option<Duration>,
     close_timeout: Option<Duration>,
     connect_timeout: Duration,
     afk_timeout: Option<Duration>,
@@ -87,6 +89,8 @@ impl DefaultSocketManagerBuilder {
             packet_limit: 1024,
             is_power_suppressed_enabled: false,
             tcp_no_delay: true,
+            is_keep_alive_enabled: false,
+            keep_alive: None,
             close_timeout: None,
             connect_timeout: Duration::from_secs(30),
             afk_timeout: None,
@@ -209,6 +213,30 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
     /// Default: `true`
     pub fn set_tcp_no_delay(mut self, tcp_no_delay: bool) -> Self {
         self.tcp_no_delay = tcp_no_delay;
+        self
+    }
+
+    /// Sets the value of the `SO_KEEPALIVE` option on each connection.
+    ///
+    /// If set, the operating system periodically probes the peer of an idle connection and closes the connection when
+    /// the peer does not answer.
+    ///
+    /// Default: `false`
+    pub fn set_keep_alive_enable(mut self, enable: bool) -> Self {
+        self.is_keep_alive_enabled = enable;
+        self
+    }
+
+    /// Sets the idle time before the first keepalive probe is sent, the `TCP_KEEPIDLE` option.
+    ///
+    /// The duration only has a precision of seconds and will be silently truncated. It takes effect only if the
+    /// keepalive is enabled by [`set_keep_alive_enable`].
+    ///
+    /// Default: `None` (the value of the operating system)
+    ///
+    /// [`set_keep_alive_enable`]: Self::set_keep_alive_enable
+    pub fn set_keep_alive(mut self, keep_alive: Duration) -> Self {
+        self.keep_alive = Some(keep_alive);
         self
     }
 
@@ -356,6 +384,8 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
             packet_limit: self.packet_limit,
             is_power_suppressed_enabled: self.is_power_suppressed_enabled,
             tcp_no_delay: self.tcp_no_delay,
+            is_keep_alive_enabled: self.is_keep_alive_enabled,
+            keep_alive: self.keep_alive,
             close_timeout: self.close_timeout,
             connect_timeout: self.connect_timeout,
             afk_timeout: self.afk_timeout,
@@ -407,6 +437,8 @@ impl<P: EventManager> DefaultSocketManagerBuilder<P> {
         }
         let socket_config = SocketConfig {
             tcp_no_delay: self.tcp_no_delay,
+            is_keep_alive_enabled: self.is_keep_alive_enabled,
+            keep_alive: self.keep_alive,
             close_timeout: self.close_timeout,
             connect_timeout: self.connect_timeout,
             afk_timeout: self.afk_timeout,
