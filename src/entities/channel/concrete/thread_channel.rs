@@ -80,6 +80,26 @@ impl<N: 'static, P: Send + 'static> ThreadChannel<N, P> {
         self.submit(move |channel| channel.write(message))
     }
 
+    /// Whether this channel is in slow mode, from any thread.
+    ///
+    /// Slow mode starts when the queue of pending messages is larger than the [`large_threshold`], and ends when it
+    /// is smaller than the [`threshold`] again. The state is read on the thread of the channel, the calling thread
+    /// waits for the result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotConnected`] if the channel has been closed, [`BrokenPipe`] if the thread of the channel has been
+    /// shut down and [`Deadlock`] if called on the thread of the channel.
+    ///
+    /// [`large_threshold`]: crate::SocketManager::large_threshold
+    /// [`threshold`]: crate::SocketManager::threshold
+    /// [`NotConnected`]: io::ErrorKind::NotConnected
+    /// [`BrokenPipe`]: io::ErrorKind::BrokenPipe
+    /// [`Deadlock`]: io::ErrorKind::Deadlock
+    pub fn is_locked(&self) -> io::Result<bool> {
+        self.submit(|channel| Ok(channel.is_locked()))
+    }
+
     /// Request to flush all pending messages via this channel from any thread.
     ///
     /// # Errors

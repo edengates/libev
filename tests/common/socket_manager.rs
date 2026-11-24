@@ -768,6 +768,38 @@ fn thread_channel() {
 }
 
 #[test]
+fn thread_is_locked() {
+    let (sender, receiver) = mpsc::channel();
+    let server = DefaultSocketManagerBuilder::new()
+        .set_socket_pool(shard_manager(1))
+        .set_threshold(1)
+        .set_large_threshold(2)
+        .add_event_listener(ThreadChannelAdapter { callback: sender })
+        .build()
+        .unwrap();
+    let address = server.bind("127.0.0.1:0").unwrap();
+
+    let mut client = TcpStream::connect(address).unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let channel = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    thread::spawn(move || {
+        assert!(!channel.is_locked().unwrap());
+        channel.write(BytesMut::from(&b"ping"[..])).unwrap();
+        assert!(channel.is_locked().unwrap());
+        channel.flush().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while channel.is_locked().unwrap() {
+            assert!(Instant::now() < deadline);
+            thread::yield_now();
+        }
+    })
+    .join()
+    .unwrap();
+
+    client.read_exact(&mut [0; 4]).unwrap();
+}
+
+#[test]
 fn deadlock() {
     let (sender, receiver) = mpsc::channel();
     let server = DefaultSocketManagerBuilder::new()
