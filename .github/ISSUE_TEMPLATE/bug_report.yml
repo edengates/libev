@@ -21,7 +21,7 @@ body:
     description: |
       Please let us know, which specific version of libev you used.
       If your version is outdated, maybe try updating and see if that already fixes your problem.
-      You can see the latest version in the [Releases](https://github.com/java-nio-toolkit/libev/releases).
+      You can see the latest version in the [Releases](https://github.com/edengates/libev/releases).
       To find out your version, you can run `cargo tree -i libev` in your project.
     placeholder: "For example 0.2.4"
   validations:
