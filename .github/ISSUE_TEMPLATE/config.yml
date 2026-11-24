@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Documentation
-    url: https://java-nio-toolkit.github.io/libev/
+    url: https://edengates.github.io/libev/
     about: The documentation is the perfect place to retrieve information about various methods within libev.
   - name: Releases
-    url: https://github.com/java-nio-toolkit/libev/releases
+    url: https://github.com/edengates/libev/releases
     about: You can find the latest releases here on GitHub.

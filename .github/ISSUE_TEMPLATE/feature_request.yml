@@ -13,7 +13,7 @@ body:
     options:
       - label: I have checked for similar issues on the Issue-tracker.
         required: true
-      - label: I have updated to the [latest libev version](https://github.com/java-nio-toolkit/libev/releases/latest)
+      - label: I have updated to the [latest libev version](https://github.com/edengates/libev/releases/latest)
         required: true
       - label: I have checked the branches or the maintainers' PRs for upcoming features.
         required: true
