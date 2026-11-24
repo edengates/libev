@@ -1,7 +1,7 @@
 ## Pull Request Etiquette
 
 - [ ] I have checked the PRs for upcoming features/bug fixes.
-- [ ] I have read the [contributing guidelines](https://github.com/java-nio-toolkit/libev/blob/master/.github/CONTRIBUTING.md).
+- [ ] I have read the [contributing guidelines](https://github.com/edengates/libev/blob/master/.github/CONTRIBUTING.md).
 - [ ] I checked my changes with `cargo clippy --all-targets` and `cargo test`
 
 ### Changes

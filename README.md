@@ -18,7 +18,7 @@ The core concepts of libev have been developed to make building scalable sockets
 ## Installation
 
 This library is available on crates.io. The latest version is always shown in the
-[GitHub Release](https://github.com/java-nio-toolkit/libev/releases/latest).
+[GitHub Release](https://github.com/edengates/libev/releases/latest).
 
 The minimum Rust version supported by libev is Rust 1.86.
 
@@ -30,7 +30,7 @@ bytes = "1" # required for the BytesMut messages received and sent by the listen
 
 ## Getting started
 
-There are a number of [examples](https://github.com/java-nio-toolkit/libev/tree/master/examples) to introduce you to
+There are a number of [examples](https://github.com/edengates/libev/tree/master/examples) to introduce you to
 libev. You can also take a look at the [Documentation](https://docs.rs/libev).
 
 Every socket implemented by libev starts out using the
@@ -83,7 +83,7 @@ fn main() -> io::Result<()> {
 }
 ```
 You can find a more thorough example with the
-[MessageLoggerExample](https://github.com/java-nio-toolkit/libev/blob/master/examples/message_logger.rs) struct.
+[MessageLoggerExample](https://github.com/edengates/libev/blob/master/examples/message_logger.rs) struct.
 
 ### Example: Message Create
 
@@ -134,7 +134,7 @@ fn main() -> io::Result<()> {
 ```
 
 You can find a more thorough example with the
-[MessageCreateExample](https://github.com/java-nio-toolkit/libev/blob/master/examples/message_create.rs) struct.
+[MessageCreateExample](https://github.com/edengates/libev/blob/master/examples/message_create.rs) struct.
 
 ## SocketAction
 
