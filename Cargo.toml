@@ -1,11 +1,11 @@
 [package]
 name = "libev"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2024"
 rust-version = "1.86"
 description = "A Rust I/O library for the event-driven asynchronous network applications"
 license = "Apache-2.0"
-repository = "https://github.com/java-nio-toolkit/libev"
+repository = "https://github.com/edengates/libev"
 keywords = ["network", "socket", "iocp", "io-uring", "epoll"]
 categories = ["network-programming", "asynchronous"]
 exclude = [".github"]
