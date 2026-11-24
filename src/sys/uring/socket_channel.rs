@@ -27,6 +27,7 @@ use std::net::{SocketAddr, TcpStream};
 
 pub struct SocketChannel {
     state: SocketChannelState,
+    cancelling: bool,
 }
 
 impl SocketChannel {
@@ -36,6 +37,7 @@ impl SocketChannel {
     ) -> Self {
         Self {
             state: SocketChannelState::new(socket, None, socket_manager),
+            cancelling: false,
         }
     }
 
@@ -46,11 +48,13 @@ impl SocketChannel {
     ) -> Self {
         Self {
             state: SocketChannelState::new(socket, Some(address), socket_manager),
+            cancelling: false,
         }
     }
 
-    fn read(&mut self, manager: &mut ScheduledExecutorService, body: Option<BytesMut>) -> io::Result<bool> {
-        self.state.receiving = false;
+    fn read(&mut self, manager: &mut ScheduledExecutorService, body: Option<BytesMut>, more: bool) -> io::Result<bool> {
+        self.state.receiving = more;
+        self.cancelling &= more;
         match body {
             Some(message) => self.state.channel.read(manager, message),
             None => self.state.channel.buffer().borrow_mut().close(),
@@ -71,15 +75,22 @@ impl SocketChannelMixin for SocketChannel {
     fn handle_event(&mut self, manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool> {
         let packet = match data {
             Ok(Event::IoUring(packet)) => packet,
-            Err(error) if error.raw_os_error() == Some(Errno::NOBUFS.raw_os_error()) => {
+            Err(error)
+                if error.raw_os_error() == Some(Errno::NOBUFS.raw_os_error())
+                    || error.raw_os_error() == Some(Errno::CANCELED.raw_os_error()) =>
+            {
                 self.state.receiving = false;
+                self.cancelling = false;
                 return self.execute(manager);
             }
             _ => return Ok(false),
         };
         match packet.opcode() {
             opcode::Connect::CODE => self.on_connected(manager),
-            opcode::Recv::CODE => self.read(manager, packet.into_body()),
+            opcode::Recv::CODE => {
+                let more = packet.more();
+                self.read(manager, packet.into_body(), more)
+            }
             opcode::Writev::CODE => self.handle_response(manager),
             _ => Ok(false),
         }
@@ -91,6 +102,14 @@ impl SocketChannelMixin for SocketChannel {
 
     fn do_begin_read(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<()> {
         manager.read(&self.state.socket)
+    }
+
+    fn do_cancel_read(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<()> {
+        if manager.is_multishot_enabled() && !self.cancelling {
+            self.cancelling = true;
+            manager.unread()?;
+        }
+        Ok(())
     }
 
     fn do_write(&mut self, manager: &mut ScheduledExecutorService, messages: Vec<BytesMut>) -> io::Result<()> {

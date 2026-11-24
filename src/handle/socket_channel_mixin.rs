@@ -71,6 +71,10 @@ pub(crate) trait SocketChannelMixin: Sized {
 
     fn do_begin_read(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<()>;
 
+    fn do_cancel_read(&mut self, _manager: &mut ScheduledExecutorService) -> io::Result<()> {
+        Ok(())
+    }
+
     fn do_write(&mut self, manager: &mut ScheduledExecutorService, messages: Vec<BytesMut>) -> io::Result<()>;
 
     fn do_close(&mut self, _manager: &mut ScheduledExecutorService) {}
@@ -149,6 +153,8 @@ impl<T: SocketChannelMixin> Channel for T {
         if !self.state().receiving && !channel.is_connected() && is_open && !is_deafened {
             self.do_begin_read(manager)?;
             self.state_mut().receiving = true;
+        } else if self.state().receiving && is_deafened {
+            self.do_cancel_read(manager)?;
         }
         if !is_open && self.state().sending.is_some() && !self.state().closing {
             self.state_mut().closing = true;
