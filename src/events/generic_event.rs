@@ -16,9 +16,7 @@
 
 use std::any::Any;
 
-/// Interface for events supported by [`MessageChannel`].
-///
-/// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
+/// Interface for events supported by `Channel`.
 pub trait GenericEvent: Any + Send {}
 
 // We do the downcasting on dyn GenericEvent because type parameters would make the trait not dyn-compatible.

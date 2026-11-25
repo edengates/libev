@@ -15,15 +15,14 @@
  */
 
 //! The core events that are fired, informing the end-user about the state of the current
-//! [`MessageChannel`].
+//! `Channel`.
 //!
 //! This module contains all implementations of [`GenericEvent`]. These are specific depending on the event that
 //! has been received by the socket.
 //!
 //! All events are forwarded by the registered [`ListenerAdapter`]s. Some events are specific for internal events
-//! such as the [`ChannelReadyEvent`] which is only fired when a [`MessageChannel`] is ready to be used.
+//! such as the [`ChannelReadyEvent`] which is only fired when a `Channel` is ready to be used.
 //!
-//! [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
 //! [`ListenerAdapter`]: crate::hooks::ListenerAdapter
 //! [`ChannelReadyEvent`]: channel::ChannelReadyEvent
 pub mod channel;

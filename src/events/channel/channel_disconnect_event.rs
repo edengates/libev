@@ -16,9 +16,7 @@
 
 use crate::events::{Event, GenericEvent};
 
-/// Indicates that a [`MessageChannel`] has been disconnected from the peer.
-///
-/// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
+/// Indicates that a `Channel` has been disconnected from the peer.
 pub struct ChannelDisconnectEvent;
 
 impl ChannelDisconnectEvent {

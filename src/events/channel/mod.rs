@@ -14,9 +14,7 @@
  * limitations under the License.
  */
 
-//! Events indicating that the state of a [`MessageChannel`] has changed.
-//!
-//! [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
+//! Events indicating that the state of a `Channel` has changed.
 mod channel_disconnect_event;
 pub use channel_disconnect_event::ChannelDisconnectEvent;
 mod channel_ready_event;
