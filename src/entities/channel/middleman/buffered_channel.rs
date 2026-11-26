@@ -19,9 +19,9 @@ use crate::entities::ISnowflake;
 use crate::entities::channel::concrete::ThreadChannel;
 use crate::events::channel::update::ChannelUpdateSlowmodeEvent;
 use crate::events::channel::{ChannelDisconnectEvent, ChannelReadyEvent, ChannelTimeoutEvent};
-use crate::events::message::MessageReceivedEvent;
+use crate::events::buffer::BufferReceivedEvent;
 use crate::events::{Event, GenericEvent};
-use crate::requests::sockactions::MessageCreateAction;
+use crate::requests::sockactions::BufferCreateAction;
 use crate::requests::Sink;
 use crate::utils::EventQueue;
 use crate::utils::Buffer;
@@ -36,13 +36,13 @@ use std::sync::{Arc, RwLock};
 
 /// Represents a channel that can have messages sent to it.
 ///
-/// Every registered [`ListenerAdapter`] has its own [`MessageChannel`] with the position of the listener.
+/// Every registered [`ListenerAdapter`] has its own [`BufferedChannel`] with the position of the listener.
 /// The `on_*` methods fire events to the next listener.
 ///
 /// `N` is the type of messages for the next listener, `P` is the type of messages for the parent channel.
 ///
 /// [`ListenerAdapter`]: crate::hooks::ListenerAdapter
-pub struct MessageChannel<N = BytesMut, P = BytesMut> {
+pub struct BufferedChannel<N = BytesMut, P = BytesMut> {
     socket_manager: SocketManager,
     buffer: Rc<RefCell<Buffer>>,
     thread_channel: ThreadChannel<N, P>,
@@ -51,7 +51,7 @@ pub struct MessageChannel<N = BytesMut, P = BytesMut> {
     marker: PhantomData<N>,
 }
 
-impl<N, P> Clone for MessageChannel<N, P> {
+impl<N, P> Clone for BufferedChannel<N, P> {
     fn clone(&self) -> Self {
         Self {
             socket_manager: self.socket_manager.clone(),
@@ -64,7 +64,7 @@ impl<N, P> Clone for MessageChannel<N, P> {
     }
 }
 
-impl<N, P> MessageChannel<N, P> {
+impl<N, P> BufferedChannel<N, P> {
     pub(crate) fn new(
         socket_manager: SocketManager,
         buffer: Rc<RefCell<Buffer>>,
@@ -104,12 +104,12 @@ impl<N, P> MessageChannel<N, P> {
         self.handle(Box::new(ChannelReadyEvent));
     }
 
-    /// Passes a received message on as a [`MessageReceivedEvent`].
-    pub fn on_message_received(&mut self, message: N)
+    /// Passes a received message on as a [`BufferReceivedEvent`].
+    pub fn on_buffer_received(&mut self, message: N)
     where
         N: Any + Send,
     {
-        self.handle(Box::new(MessageReceivedEvent::new(
+        self.handle(Box::new(BufferReceivedEvent::new(
             message,
         )));
     }
@@ -171,9 +171,9 @@ impl<N, P> MessageChannel<N, P> {
 
     /// Request to flush all pending messages via this channel.
     ///
-    /// [`MessageCreateAction::queue`] calls this method for you.
+    /// [`BufferCreateAction::queue`] calls this method for you.
     ///
-    /// [`MessageCreateAction::queue`]: crate::requests::sockactions::SocketAction::queue
+    /// [`BufferCreateAction::queue`]: crate::requests::sockactions::SocketAction::queue
     pub fn flush(&mut self) {
         Sink::flush(self);
     }
@@ -181,11 +181,11 @@ impl<N, P> MessageChannel<N, P> {
     /// Send a message to this channel.
     ///
     /// This requires an additional step to complete the execution, for example when you call
-    /// [`MessageCreateAction::queue`].
+    /// [`BufferCreateAction::queue`].
     ///
-    /// [`MessageCreateAction::queue`]: crate::requests::sockactions::SocketAction::queue
-    pub fn send_message(&mut self, message: P) -> MessageCreateAction<'_, N, P> {
-        MessageCreateAction::new(self, message)
+    /// [`BufferCreateAction::queue`]: crate::requests::sockactions::SocketAction::queue
+    pub fn send_buffer(&mut self, message: P) -> BufferCreateAction<'_, N, P> {
+        BufferCreateAction::new(self, message)
     }
 
     /// Close down the current connection of this channel.
@@ -209,13 +209,13 @@ impl<N, P> MessageChannel<N, P> {
     }
 }
 
-impl<N, P> ISnowflake for MessageChannel<N, P> {
+impl<N, P> ISnowflake for BufferedChannel<N, P> {
     fn id(&self) -> u64 {
         self.thread_channel.id()
     }
 }
 
-impl<N, P> Sink<P> for MessageChannel<N, P> {
+impl<N, P> Sink<P> for BufferedChannel<N, P> {
     fn write(&self, message: P) -> io::Result<()> {
         // If the buffer is shutdown we know the channel was closed and so
         // need to fail the result right away. If it is not shutdown the handling of the rest
@@ -261,7 +261,7 @@ mod tests {
         let port = std::sync::Arc::new(crate::handle::CompletionService::new_factory()(8).unwrap());
         let thread_channel = ThreadChannel::new(0, 0, std::sync::Arc::new(crate::utils::concurrent::Dispatcher::new(&port).0));
         let head = BufferedSink::new(&socket_manager, &buffer, &thread_channel, &EventQueue::default());
-        let mut channel: MessageChannel = MessageChannel::new(
+        let mut channel: BufferedChannel = BufferedChannel::new(
             socket_manager,
             Rc::clone(&buffer),
             thread_channel,
@@ -269,7 +269,7 @@ mod tests {
             head.channel(),
         );
         channel
-            .send_message(BytesMut::from(&b"ping"[..]))
+            .send_buffer(BytesMut::from(&b"ping"[..]))
             .complete()
             .unwrap();
         channel.close();

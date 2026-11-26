@@ -15,5 +15,5 @@
  */
 
 //! Abstractions for higher-level features in socket channels, such as sending messages.
-mod message_channel;
-pub use message_channel::MessageChannel;
+mod buffered_channel;
+pub use buffered_channel::BufferedChannel;

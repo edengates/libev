@@ -44,7 +44,7 @@ provides a set of settings for the thread pools, buffers and timeouts it wants t
 
 Here are some possible use-cases:
 
-### Example: Message Logging
+### Example: Buffer Logging
 
 Simply logging messages to the console. Making use of `DefaultSocketManagerBuilder`, the intended entry point for every
 socket, whether it accepts connections or connects to an address.
@@ -54,11 +54,11 @@ Starting your server and attaching an event listener:
 ```rust
 // Every channel uses its own clone of the listener, so it has to implement Clone
 #[derive(Clone)]
-struct MessageLoggerExample;
+struct BufferLoggerExample;
 
-impl ListenerAdapter for MessageLoggerExample {
+impl ListenerAdapter for BufferLoggerExample {
     // Gets called for every message received from the socket
-    async fn on_message_received(&mut self, _channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+    async fn on_buffer_received(&mut self, _channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
         // The message is the raw bytes received from the socket, this converts it to a readable string
         println!("[message] {}", String::from_utf8_lossy(&message));
         Ok(())
@@ -68,7 +68,7 @@ impl ListenerAdapter for MessageLoggerExample {
 fn main() -> io::Result<()> {
     // On this builder, you are adding all your event listeners and socket configuration
     let manager = DefaultSocketManagerBuilder::new()
-        .add_event_listener(MessageLoggerExample)
+        .add_event_listener(BufferLoggerExample)
         .build()?;
 
     // bind(...) starts accepting connections on the address and returns the address it is bound to
@@ -83,9 +83,9 @@ fn main() -> io::Result<()> {
 }
 ```
 You can find a more thorough example with the
-[MessageLoggerExample](https://github.com/edengates/libev/blob/master/examples/message_logger.rs) struct.
+[BufferLoggerExample](https://github.com/edengates/libev/blob/master/examples/buffer_logger.rs) struct.
 
-### Example: Message Create
+### Example: Buffer Create
 
 Simply sending a message to an address. Making use of the same `DefaultSocketManagerBuilder`, this time connecting to
 the address instead of accepting connections on it.
@@ -95,20 +95,20 @@ Connecting your client and sending a message once the connection is ready:
 ```rust
 // Every channel uses its own clone of the listener, so it has to implement Clone
 #[derive(Clone)]
-struct MessageCreateExample;
+struct BufferCreateExample;
 
-impl ListenerAdapter for MessageCreateExample {
+impl ListenerAdapter for BufferCreateExample {
     // Gets called once the connection to the address is established
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
-        // send_message(...) creates a MessageCreateAction, nothing is sent until you queue it
-        channel.send_message(BytesMut::from(&b"ping"[..])).queue(
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
+        // send_buffer(...) creates a BufferCreateAction, nothing is sent until you queue it
+        channel.send_buffer(BytesMut::from(&b"ping"[..])).queue(
             |_| println!("[queued] ping"),
             |error| eprintln!("The message could not be sent: {}", error),
         )
     }
 
     // Gets called for every reply of the address, this one prints it and closes the channel
-    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
         println!("[reply] {}", String::from_utf8_lossy(&message));
         channel.close();
         Ok(())
@@ -118,7 +118,7 @@ impl ListenerAdapter for MessageCreateExample {
 fn main() -> io::Result<()> {
     // On this builder, you are adding all your event listeners and socket configuration
     let manager = DefaultSocketManagerBuilder::new()
-        .add_event_listener(MessageCreateExample)
+        .add_event_listener(BufferCreateExample)
         .build()?;
 
     // connect(...) starts connecting to the address, on_ready is called once the connection is established
@@ -134,7 +134,7 @@ fn main() -> io::Result<()> {
 ```
 
 You can find a more thorough example with the
-[MessageCreateExample](https://github.com/edengates/libev/blob/master/examples/message_create.rs) struct.
+[BufferCreateExample](https://github.com/edengates/libev/blob/master/examples/buffer_create.rs) struct.
 
 ## SocketAction
 
@@ -142,7 +142,7 @@ In this library, the `SocketAction` trait is used as a message builder for all o
 represents a lazy message builder, as shown in this simple example:
 
 ```rust
-channel.send_message(BytesMut::from("Hello Friend!")) // Create the message
+channel.send_buffer(BytesMut::from("Hello Friend!")) // Create the message
     .queue(|_| (), |_| ())?; // Send the message
 ```
 
@@ -169,9 +169,9 @@ As well as combinators like:
 Example:
 
 ```rust
-fn greet<'a>(channel: &'a mut MessageChannel, target: &'a mut MessageChannel) -> impl SocketAction<String> + 'a {
-    channel.send_message(BytesMut::from("Hello Friend!")) // send the greeting
-        .flat_map(move |_| target.send_message(BytesMut::from("A friend was greeted!"))) // then tell the target
+fn greet<'a>(channel: &'a mut BufferedChannel, target: &'a mut BufferedChannel) -> impl SocketAction<String> + 'a {
+    channel.send_buffer(BytesMut::from("Hello Friend!")) // send the greeting
+        .flat_map(move |_| target.send_buffer(BytesMut::from("A friend was greeted!"))) // then tell the target
         .map(|_| String::from("The friend was greeted")) // then return the result
         .on_error_map(|error| error.to_string()) // or the reason why it failed
 }

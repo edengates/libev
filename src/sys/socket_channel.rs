@@ -15,7 +15,7 @@
  */
 
 use crate::SocketManager;
-use crate::entities::channel::mixin::middleman::MessageChannelMixin;
+use crate::entities::channel::mixin::middleman::BufferedChannelMixin;
 use crate::handle::SocketHandler;
 use crate::handle::{self, READABLE, WRITABLE};
 use crate::utils::concurrent::ScheduledExecutorService;
@@ -33,7 +33,7 @@ use std::time::Duration;
 
 pub struct SocketChannel {
     socket: TcpStream,
-    channel: Rc<MessageChannelMixin>,
+    channel: Rc<BufferedChannelMixin>,
     socket_address: Option<SocketAddr>,
     sending: usize,
     packet: Vec<BytesMut>,
@@ -56,7 +56,7 @@ impl SocketChannel {
     ) -> Self {
         Self {
             socket,
-            channel: Rc::new(MessageChannelMixin::new(socket_manager)),
+            channel: Rc::new(BufferedChannelMixin::new(socket_manager)),
             socket_address: None,
             sending: 0,
             packet: Vec::new(),

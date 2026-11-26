@@ -15,17 +15,17 @@
  */
 
 use crate::entities::ISnowflake;
-use crate::entities::channel::middleman::MessageChannel;
-use crate::requests::sockactions::ThreadMessageCreateAction;
+use crate::entities::channel::middleman::BufferedChannel;
+use crate::requests::sockactions::ThreadBufferCreateAction;
 use crate::utils::concurrent::{Dispatcher, ScheduledExecutorService};
 use bytes::BytesMut;
 use std::io;
 use std::marker::PhantomData;
 use std::sync::{Arc, mpsc};
 
-/// A [`MessageChannel`] that can be shared with other threads.
+/// A [`BufferedChannel`] that can be shared with other threads.
 ///
-/// Every method runs the same method of the [`MessageChannel`] on the thread of the channel.
+/// Every method runs the same method of the [`BufferedChannel`] on the thread of the channel.
 ///
 /// `N` is the type of messages for the next listener, `P` is the type of messages for the parent channel.
 pub struct ThreadChannel<N = BytesMut, P = BytesMut> {
@@ -114,13 +114,13 @@ impl<N: 'static, P: Send + 'static> ThreadChannel<N, P> {
     /// Send a message to this channel from any thread.
     ///
     /// This requires an additional step to complete the execution, for example when you call
-    /// [`ThreadMessageCreateAction::queue`]. The message is written on the thread of the channel, the calling thread
+    /// [`ThreadBufferCreateAction::queue`]. The message is written on the thread of the channel, the calling thread
     /// waits for the result. Called on the thread of the channel, the execution fails with [`Deadlock`].
     ///
-    /// [`ThreadMessageCreateAction::queue`]: crate::requests::sockactions::SocketAction::queue
+    /// [`ThreadBufferCreateAction::queue`]: crate::requests::sockactions::SocketAction::queue
     /// [`Deadlock`]: io::ErrorKind::Deadlock
-    pub fn send_message(&self, message: P) -> ThreadMessageCreateAction<'_, N, P> {
-        ThreadMessageCreateAction::new(self, message)
+    pub fn send_buffer(&self, message: P) -> ThreadBufferCreateAction<'_, N, P> {
+        ThreadBufferCreateAction::new(self, message)
     }
 
     /// Closes this channel from any thread, once all pending messages have been sent.
@@ -150,7 +150,7 @@ impl<N: 'static, P: Send + 'static> ThreadChannel<N, P> {
     pub(crate) fn submit<T, F>(&self, action: F) -> io::Result<T>
     where
         T: Send + 'static,
-        F: FnOnce(&mut MessageChannel<N, P>) -> io::Result<T> + Send + 'static,
+        F: FnOnce(&mut BufferedChannel<N, P>) -> io::Result<T> + Send + 'static,
     {
         if ScheduledExecutorService::is_current(self.dispatcher.port()) {
             return Err(io::ErrorKind::Deadlock.into());
@@ -162,7 +162,7 @@ impl<N: 'static, P: Send + 'static> ThreadChannel<N, P> {
         receiver.recv().map_err(|_| io::Error::from(io::ErrorKind::NotConnected))?
     }
 
-    pub(crate) fn execute<F: FnOnce(&mut MessageChannel<N, P>) + Send + 'static>(&self, action: F) -> io::Result<()> {
+    pub(crate) fn execute<F: FnOnce(&mut BufferedChannel<N, P>) + Send + 'static>(&self, action: F) -> io::Result<()> {
         let (id, position) = (self.id, self.position);
         self.dispatcher
             .dispatch(Box::new(move |manager| manager.execute_channel(id, position, action)))

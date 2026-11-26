@@ -20,7 +20,7 @@ use crate::entities::channel::concrete::ThreadChannel;
 use crate::entities::channel::mixin::ChannelMixin;
 use crate::events::channel::update::ChannelUpdateSlowmodeEvent;
 use crate::events::channel::{ChannelDisconnectEvent, ChannelReadyEvent, ChannelTimeoutEvent};
-use crate::events::message::MessageReceivedEvent;
+use crate::events::buffer::BufferReceivedEvent;
 use crate::events::Event;
 use crate::utils::{EventQueue, EventManagerProxy};
 use crate::utils::concurrent::ScheduledExecutorService;
@@ -32,7 +32,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 /// The state shared by the platform specific socket channels, such as the queue of pending messages.
-pub struct MessageChannelMixin {
+pub struct BufferedChannelMixin {
     socket_manager: SocketManager,
     buffer: Rc<RefCell<Buffer>>,
     thread_channel: ThreadChannel,
@@ -45,7 +45,7 @@ pub struct MessageChannelMixin {
     heartbeat_start_time: Cell<Instant>,
 }
 
-impl MessageChannelMixin {
+impl BufferedChannelMixin {
     pub(crate) fn new(socket_manager: SocketManager) -> Self {
         let buffer = Rc::default();
         let thread_channel = ScheduledExecutorService::thread_channel();
@@ -105,7 +105,7 @@ impl MessageChannelMixin {
         if self.socket_manager.afk_timeout().is_some() {
             self.heartbeat_start_time.set(Instant::now());
         }
-        self.handle_event(manager, Box::new(MessageReceivedEvent::new(message)));
+        self.handle_event(manager, Box::new(BufferReceivedEvent::new(message)));
     }
 
     pub(crate) fn handle_response(&self, size: usize) {
@@ -163,12 +163,12 @@ impl MessageChannelMixin {
     }
 }
 
-impl ChannelMixin for MessageChannelMixin {
+impl ChannelMixin for BufferedChannelMixin {
     fn channels(&self) -> &RefCell<Vec<Box<dyn Any>>> {
-        MessageChannelMixin::channels(self)
+        BufferedChannelMixin::channels(self)
     }
 
     fn wake(self: Rc<Self>, manager: &mut ScheduledExecutorService) {
-        MessageChannelMixin::wake(&self, manager);
+        BufferedChannelMixin::wake(&self, manager);
     }
 }

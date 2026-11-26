@@ -14,24 +14,24 @@
  * limitations under the License.
  */
 
-use crate::entities::channel::middleman::MessageChannel;
+use crate::entities::channel::middleman::BufferedChannel;
 use crate::requests::sockactions::SocketAction;
 use std::future::{self, IntoFuture, Ready};
 use std::io;
 
 #[must_use]
-pub struct MessageCreateAction<'a, N, P> {
-    channel: &'a mut MessageChannel<N, P>,
+pub struct BufferCreateAction<'a, N, P> {
+    channel: &'a mut BufferedChannel<N, P>,
     message: P,
 }
 
-impl<'a, N, P> MessageCreateAction<'a, N, P> {
-    pub(crate) fn new(channel: &'a mut MessageChannel<N, P>, message: P) -> Self {
+impl<'a, N, P> BufferCreateAction<'a, N, P> {
+    pub(crate) fn new(channel: &'a mut BufferedChannel<N, P>, message: P) -> Self {
         Self { channel, message }
     }
 }
 
-impl<N, P> SocketAction<()> for MessageCreateAction<'_, N, P> {
+impl<N, P> SocketAction<()> for BufferCreateAction<'_, N, P> {
     fn complete(self) -> io::Result<()> {
         let data = self.channel.write(self.message);
         self.channel.flush();
@@ -39,7 +39,7 @@ impl<N, P> SocketAction<()> for MessageCreateAction<'_, N, P> {
     }
 }
 
-impl<N, P> IntoFuture for MessageCreateAction<'_, N, P> {
+impl<N, P> IntoFuture for BufferCreateAction<'_, N, P> {
     type Output = io::Result<()>;
     type IntoFuture = Ready<io::Result<()>>;
 

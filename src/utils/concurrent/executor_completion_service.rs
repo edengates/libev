@@ -366,24 +366,24 @@ mod tests {
             data?;
             let (stream, _) = self.listener.accept()?;
             stream.set_nonblocking(true)?;
-            manager.register(Box::new(MessageCreateHandler { stream }))?;
+            manager.register(Box::new(BufferCreateHandler { stream }))?;
             Ok(true)
         }
 
         #[cfg(windows)]
         fn handle(&mut self, manager: &mut ScheduledExecutorService, data: Completion) -> io::Result<bool> {
             let stream = socket::accepted(&self.listener, &mut *Event::from_completion(data)?)?;
-            manager.register(Box::new(MessageCreateHandler { stream }))?;
+            manager.register(Box::new(BufferCreateHandler { stream }))?;
             manager.accept(&self.listener)?;
             Ok(true)
         }
     }
 
-    struct MessageCreateHandler {
+    struct BufferCreateHandler {
         stream: TcpStream,
     }
 
-    impl SocketHandler for MessageCreateHandler {
+    impl SocketHandler for BufferCreateHandler {
         #[cfg(unix)]
         fn socket(&self) -> BorrowedFd<'_> {
             self.stream.as_fd()

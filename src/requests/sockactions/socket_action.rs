@@ -43,11 +43,11 @@ use std::io;
 ///
 /// ```
 /// # use bytes::BytesMut;
-/// # use libev::entities::channel::middleman::MessageChannel;
+/// # use libev::entities::channel::middleman::BufferedChannel;
 /// # use libev::requests::sockactions::SocketAction;
 /// # use std::io;
-/// # fn send(channel: &mut MessageChannel) -> io::Result<()> {
-/// let action = channel.send_message(BytesMut::from(&b"Hello World"[..]));
+/// # fn send(channel: &mut BufferedChannel) -> io::Result<()> {
+/// let action = channel.send_buffer(BytesMut::from(&b"Hello World"[..]));
 /// action.queue(|_| (), |_| ())?; // Execute the socket action
 /// # Ok(())
 /// # }
@@ -69,11 +69,11 @@ pub trait SocketAction<T>: Sized {
     ///
     /// ```
     /// # use bytes::BytesMut;
-    /// # use libev::entities::channel::middleman::MessageChannel;
+    /// # use libev::entities::channel::middleman::BufferedChannel;
     /// # use libev::requests::sockactions::SocketAction;
     /// # use std::io;
-    /// fn send_message(channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
-    ///     channel.send_message(message).queue(
+    /// fn send_buffer(channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
+    ///     channel.send_buffer(message).queue(
     ///         // Handle success once the message is sent
     ///         |_| println!("The message was sent"),
     ///         // Handle failure if the channel is closed (or another issue appeared)
@@ -103,12 +103,12 @@ pub trait SocketAction<T>: Sized {
     ///
     /// ```
     /// # use bytes::BytesMut;
-    /// # use libev::entities::channel::middleman::MessageChannel;
+    /// # use libev::entities::channel::middleman::BufferedChannel;
     /// # use libev::requests::sockactions::SocketAction;
     /// # use std::io;
-    /// async fn send_message_content(channel: &mut MessageChannel, message: BytesMut) -> io::Result<String> {
+    /// async fn send_buffer_raw(channel: &mut BufferedChannel, message: BytesMut) -> io::Result<String> {
     ///     let content = String::from_utf8_lossy(&message).into_owned();
-    ///     channel.send_message(message) // send the message
+    ///     channel.send_buffer(message) // send the message
     ///         .map(move |_| content) // return its content once it is sent
     ///         .submit()
     ///         .await
@@ -130,11 +130,11 @@ pub trait SocketAction<T>: Sized {
     ///
     /// ```
     /// # use bytes::BytesMut;
-    /// # use libev::entities::channel::middleman::MessageChannel;
+    /// # use libev::entities::channel::middleman::BufferedChannel;
     /// # use libev::requests::sockactions::SocketAction;
-    /// fn send_message_content(channel: &mut MessageChannel, message: BytesMut) -> impl SocketAction<String> + '_ {
+    /// fn send_buffer_raw(channel: &mut BufferedChannel, message: BytesMut) -> impl SocketAction<String> + '_ {
     ///     let content = String::from_utf8_lossy(&message).into_owned();
-    ///     channel.send_message(message).map(move |_| content)
+    ///     channel.send_buffer(message).map(move |_| content)
     /// }
     /// ```
     fn map<O, M>(self, map: M) -> MapObjectAction<Self, M, T>
@@ -157,15 +157,15 @@ pub trait SocketAction<T>: Sized {
     ///
     /// ```
     /// # use bytes::BytesMut;
-    /// # use libev::entities::channel::middleman::MessageChannel;
+    /// # use libev::entities::channel::middleman::BufferedChannel;
     /// # use libev::requests::sockactions::SocketAction;
-    /// fn send_message<'a>(
-    ///     channel: &'a mut MessageChannel,
-    ///     target: &'a mut MessageChannel,
+    /// fn send_buffer<'a>(
+    ///     channel: &'a mut BufferedChannel,
+    ///     target: &'a mut BufferedChannel,
     ///     message: BytesMut,
     /// ) -> impl SocketAction<()> + 'a {
-    ///     channel.send_message(message.clone()) // send the message
-    ///         .flat_map(move |_| target.send_message(message)) // then forward it to the target
+    ///     channel.send_buffer(message.clone()) // send the message
+    ///         .flat_map(move |_| target.send_buffer(message)) // then forward it to the target
     /// }
     /// ```
     fn flat_map<O, A, M>(self, flat_map: M) -> FlatMapObjectAction<Self, M, T>
@@ -187,11 +187,11 @@ pub trait SocketAction<T>: Sized {
     ///
     /// ```
     /// # use bytes::BytesMut;
-    /// # use libev::entities::channel::middleman::MessageChannel;
+    /// # use libev::entities::channel::middleman::BufferedChannel;
     /// # use libev::requests::sockactions::SocketAction;
-    /// fn send_message(channel: &mut MessageChannel, message: BytesMut) -> impl SocketAction<String> + '_ {
+    /// fn send_buffer(channel: &mut BufferedChannel, message: BytesMut) -> impl SocketAction<String> + '_ {
     ///     let content = String::from_utf8_lossy(&message).into_owned();
-    ///     channel.send_message(message) // SocketAction<()>
+    ///     channel.send_buffer(message) // SocketAction<()>
     ///         .map(move |_| content) // SocketAction<String>
     ///         .on_error_map(|error| error.to_string()) // SocketAction<String> (must be the same as above)
     /// }
@@ -214,17 +214,17 @@ pub trait SocketAction<T>: Sized {
     ///
     /// ```
     /// # use bytes::BytesMut;
-    /// # use libev::entities::channel::middleman::MessageChannel;
+    /// # use libev::entities::channel::middleman::BufferedChannel;
     /// # use libev::requests::sockactions::SocketAction;
-    /// fn send_message<'a>(
-    ///     channel: &'a mut MessageChannel,
-    ///     context: &'a mut MessageChannel,
+    /// fn send_buffer<'a>(
+    ///     channel: &'a mut BufferedChannel,
+    ///     context: &'a mut BufferedChannel,
     ///     message: BytesMut,
     /// ) -> impl SocketAction<()> + 'a {
-    ///     channel.send_message(message) // SocketAction<()>
+    ///     channel.send_buffer(message) // SocketAction<()>
     ///         .on_error_flat_map(move |error| {
     ///             let content = format!("Failed to send message. Reason: {error}");
-    ///             context.send_message(BytesMut::from(content.as_bytes()))
+    ///             context.send_buffer(BytesMut::from(content.as_bytes()))
     ///         }) // SocketAction<()> (must be the same as above)
     /// }
     /// ```
@@ -247,15 +247,15 @@ pub trait SocketAction<T>: Sized {
     ///
     /// ```
     /// # use bytes::BytesMut;
-    /// # use libev::entities::channel::middleman::MessageChannel;
+    /// # use libev::entities::channel::middleman::BufferedChannel;
     /// # use libev::requests::sockactions::SocketAction;
-    /// fn send_message<'a>(
-    ///     channel: &'a mut MessageChannel,
-    ///     target: &'a mut MessageChannel,
+    /// fn send_buffer<'a>(
+    ///     channel: &'a mut BufferedChannel,
+    ///     target: &'a mut BufferedChannel,
     ///     message: BytesMut,
     /// ) -> impl SocketAction<()> + 'a {
-    ///     channel.send_message(message.clone()) // SocketAction<()>
-    ///         .and(target.send_message(message)) // SocketAction<()> once both messages are sent
+    ///     channel.send_buffer(message.clone()) // SocketAction<()>
+    ///         .and(target.send_buffer(message)) // SocketAction<()> once both messages are sent
     /// }
     /// ```
     fn and<U, B>(self, other: B) -> CombineObjectAction<Self, B, T, U>
@@ -276,16 +276,16 @@ pub trait SocketAction<T>: Sized {
     ///
     /// ```
     /// # use bytes::BytesMut;
-    /// # use libev::entities::channel::middleman::MessageChannel;
+    /// # use libev::entities::channel::middleman::BufferedChannel;
     /// # use libev::requests::sockactions::SocketAction;
-    /// fn send_message<'a>(
-    ///     channel: &'a mut MessageChannel,
-    ///     first: &'a mut MessageChannel,
-    ///     second: &'a mut MessageChannel,
+    /// fn send_buffer<'a>(
+    ///     channel: &'a mut BufferedChannel,
+    ///     first: &'a mut BufferedChannel,
+    ///     second: &'a mut BufferedChannel,
     ///     message: BytesMut,
     /// ) -> impl SocketAction<Vec<()>> + 'a {
-    ///     channel.send_message(message.clone()) // SocketAction<()>
-    ///         .zip([first.send_message(message.clone()), second.send_message(message)]) // SocketAction<Vec<()>>
+    ///     channel.send_buffer(message.clone()) // SocketAction<()>
+    ///         .zip([first.send_buffer(message.clone()), second.send_buffer(message)]) // SocketAction<Vec<()>>
     /// }
     /// ```
     fn zip<I>(self, other: I) -> ZipObjectAction<Self, I::IntoIter>
