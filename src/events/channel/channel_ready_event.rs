@@ -16,11 +16,9 @@
 
 use crate::events::{Event, GenericEvent};
 
-/// Indicates that a [`MessageChannel`] is ready to be used.
+/// Indicates that a `Channel` is ready to be used.
 ///
 /// Before this event was fired all channel related functions were not guaranteed to work as expected.
-///
-/// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
 pub struct ChannelReadyEvent;
 
 impl ChannelReadyEvent {

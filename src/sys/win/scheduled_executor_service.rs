@@ -16,9 +16,10 @@
 
 use crate::handle::event::Event;
 use crate::handle::socket::{last_error, socket, socket_address};
-use crate::handle::CompletionService;
+use crate::handle::{Completion, CompletionService, Request};
 use crate::utils::concurrent::{ScheduledExecutorService, SHUTDOWN};
 use log::error;
+use rustc_hash::FxHashMap;
 use socket2::{SockAddr, SockRef};
 use std::io;
 use std::mem;
@@ -28,7 +29,7 @@ use std::ptr;
 use std::sync::OnceLock;
 use windows_sys::Win32::Networking::WinSock::{
     AcceptEx, LPFN_CONNECTEX, SIO_GET_EXTENSION_FUNCTION_POINTER, SOCKADDR_STORAGE, SOCKET, SOCKET_ERROR, WSABUF,
-    WSAID_CONNECTEX, WSAIoctl, WSARecv, WSASend,
+    WSAGetLastError, WSAID_CONNECTEX, WSAIoctl, WSARecv, WSASend, WSA_IO_PENDING,
 };
 use windows_sys::Win32::System::IO::{OVERLAPPED, OVERLAPPED_ENTRY};
 use windows_sys::core::GUID;
@@ -37,20 +38,35 @@ const ADDRESS_LENGTH: usize = size_of::<SOCKADDR_STORAGE>() + 16;
 
 pub struct EventArray {
     pub(crate) entries: Vec<OVERLAPPED_ENTRY>,
-    pub(crate) response_total: usize,
+    pub(crate) requests: FxHashMap<usize, Box<dyn Request>>,
 }
 
 impl EventArray {
     pub(crate) fn new(_port: &CompletionService, capacity: usize) -> Self {
         Self {
             entries: vec![unsafe { mem::zeroed() }; capacity.max(1)],
-            response_total: 0,
+            requests: FxHashMap::default(),
+        }
+    }
+}
+
+impl Drop for EventArray {
+    fn drop(&mut self) {
+        if !self.requests.is_empty() {
+            mem::forget(mem::take(&mut self.requests));
         }
     }
 }
 
 impl ScheduledExecutorService {
-    pub(crate) fn run_worker(&mut self) -> io::Result<()> {
+    /// The number of operations that have been submitted and have not completed yet.
+    pub fn pending(&self) -> usize {
+        self.array.requests.len()
+    }
+
+    /// Waits for operations to complete, at most until the next scheduled task is due, and passes them to their
+    /// handlers.
+    pub fn run_worker(&mut self) -> io::Result<()> {
         let mut entries = mem::take(&mut self.array.entries);
         let data = self.port.poll(&mut entries, self.queue.timeout());
         if let Ok(count) = data {
@@ -150,8 +166,34 @@ impl ScheduledExecutorService {
     where
         F: FnOnce(&[WSABUF], *mut OVERLAPPED) -> i32,
     {
-        Event::submit(packet, opcode, call)?;
-        self.array.response_total += 1;
+        self.submit_request(packet, |packet| packet.start(opcode, call))
+    }
+
+    /// Submits an operation for the handler that is being handled.
+    ///
+    /// The `call` starts the operation with the [`overlapped`](Request::overlapped) of the request and returns the
+    /// result of the Win32 function. The request is kept until the operation has completed, then it is passed to the
+    /// handler in a [`Completion`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the operation if it failed to start.
+    pub fn submit_request<R, F>(&mut self, request: Box<R>, call: F) -> io::Result<()>
+    where
+        R: Request,
+        F: FnOnce(&mut R) -> i32,
+    {
+        let request = Box::into_raw(request);
+        let response = call(unsafe { &mut *request });
+        if response == SOCKET_ERROR {
+            let code = unsafe { WSAGetLastError() };
+            if code != WSA_IO_PENDING {
+                drop(unsafe { Box::from_raw(request) });
+                return Err(io::Error::from_raw_os_error(code));
+            }
+        }
+        let mut request: Box<dyn Request> = unsafe { Box::from_raw(request) };
+        self.array.requests.insert(request.overlapped() as usize, request);
         Ok(())
     }
 
@@ -160,25 +202,20 @@ impl ScheduledExecutorService {
             self.is_shutdown |= entry.lpCompletionKey == SHUTDOWN;
             return;
         }
-        self.array.response_total -= 1;
-        let data = unsafe { Event::from_entry(entry) };
-        self.handle_event(entry.lpCompletionKey, |handle, manager| match data {
-            Ok(mut packet) if packet.opcode() == Event::WRITE => {
-                if packet.advance() {
-                    manager.write(&handle.socket(), packet).is_ok()
-                } else {
-                    handle.handle(manager, Ok(*packet)).unwrap_or(false)
-                }
-            }
-            data => handle.handle(manager, data.map(|packet| *packet)).unwrap_or(false),
-        });
+        let Some(request) = self.array.requests.remove(&(entry.lpOverlapped as usize)) else {
+            return;
+        };
+        let completion = Completion::new(request, entry.dwNumberOfBytesTransferred as usize);
+        self.handle_event(entry.lpCompletionKey, |handle, manager| handle.handle(manager, completion).unwrap_or(false));
     }
 
+    /// Closes all handlers and waits for the operations that are still in flight.
+    ///
     /// If the port fails here, the packets still in flight are leaked.
-    pub(crate) fn close(&mut self) {
+    pub fn close(&mut self) {
         let mut entries = mem::take(&mut self.array.entries);
         self.close_sockets();
-        while self.array.response_total > 0 {
+        while !self.array.requests.is_empty() {
             let count = match self.port.poll(&mut entries, u32::MAX) {
                 Ok(count) => count,
                 Err(error) => {
@@ -188,8 +225,7 @@ impl ScheduledExecutorService {
             };
             for entry in &entries[..count] {
                 if !entry.lpOverlapped.is_null() {
-                    self.array.response_total -= 1;
-                    drop(unsafe { Event::from_entry(entry) });
+                    self.array.requests.remove(&(entry.lpOverlapped as usize));
                 }
             }
         }
@@ -230,6 +266,7 @@ mod tests {
     use crate::handle::{ServerSocketChannel, SocketChannel, socket};
     use crate::handle::CompletionService;
     use crate::handle::event::Event;
+    use crate::handle::Completion;
     use crate::utils::concurrent::ScheduledExecutorService;
     use bytes::BytesMut;
     use std::io::{self, Read, Write};
@@ -279,11 +316,12 @@ mod tests {
         (client, server)
     }
 
-    fn on_success(port: &CompletionService) -> io::Result<Box<Event>> {
+    fn on_success(manager: &mut ScheduledExecutorService) -> io::Result<Box<Event>> {
         let mut entries: [OVERLAPPED_ENTRY; 4] = unsafe { mem::zeroed() };
-        assert_eq!(port.poll(&mut entries, 1000)?, 1);
+        assert_eq!(manager.port.poll(&mut entries, 1000)?, 1);
         assert_eq!(entries[0].lpCompletionKey, 2);
-        unsafe { Event::from_entry(&entries[0]) }
+        let request = manager.array.requests.remove(&(entries[0].lpOverlapped as usize)).unwrap();
+        Event::from_completion(Completion::new(request, entries[0].dwNumberOfBytesTransferred as usize))
     }
 
     #[test]
@@ -294,7 +332,7 @@ mod tests {
         manager.read(&server, Event::new(16)).unwrap();
         client.write_all(b"ping").unwrap();
 
-        assert_eq!(&on_success(&manager.port).unwrap().buffer()[..], b"ping");
+        assert_eq!(&on_success(&mut manager).unwrap().buffer()[..], b"ping");
     }
 
     #[test]
@@ -305,7 +343,7 @@ mod tests {
         manager.read(&server, Event::new(0)).unwrap();
         client.write_all(b"ping").unwrap();
 
-        assert_eq!(on_success(&manager.port).unwrap().length(), 0);
+        assert_eq!(on_success(&mut manager).unwrap().length(), 0);
         let mut received = [0; 4];
         server.read_exact(&mut received).unwrap();
         assert_eq!(&received, b"ping");
@@ -319,7 +357,7 @@ mod tests {
         manager.read(&server, Event::new(16)).unwrap();
         drop(server);
 
-        assert!(on_success(&manager.port).is_err());
+        assert!(on_success(&mut manager).is_err());
     }
 
     #[test]
@@ -333,11 +371,23 @@ mod tests {
                 Event::wrap(vec![BytesMut::from(&b"po"[..]), BytesMut::from(&b"ng"[..])]),
             )
             .unwrap();
-        assert_eq!(on_success(&manager.port).unwrap().length(), 4);
+        assert_eq!(on_success(&mut manager).unwrap().length(), 4);
 
         let mut received = [0; 4];
         client.read_exact(&mut received).unwrap();
         assert_eq!(&received, b"pong");
+    }
+
+    #[test]
+    fn close() {
+        let mut manager = manager();
+        let (_client, server) = connect_node(&manager.port);
+
+        manager.read(&server, Event::new(16)).unwrap();
+        drop(server);
+        manager.close();
+
+        assert!(manager.array.requests.is_empty());
     }
 
     #[test]
@@ -349,7 +399,7 @@ mod tests {
         manager.accept(&listener).unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
 
-        let server = socket::accepted(&listener, *on_success(&manager.port).unwrap()).unwrap();
+        let server = socket::accepted(&listener, &mut on_success(&mut manager).unwrap()).unwrap();
         assert_eq!(server.peer_addr().unwrap(), client.local_addr().unwrap());
     }
 
@@ -364,7 +414,7 @@ mod tests {
         manager.connect(&client, &address).unwrap();
         let (server, _) = listener.accept().unwrap();
 
-        assert_eq!(on_success(&manager.port).unwrap().opcode(), Event::CONNECT);
+        assert_eq!(on_success(&mut manager).unwrap().opcode(), Event::CONNECT);
         socket::connected(&client).unwrap();
         assert_eq!(client.peer_addr().unwrap(), address);
         assert_eq!(server.peer_addr().unwrap(), client.local_addr().unwrap());

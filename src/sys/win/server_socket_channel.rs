@@ -15,7 +15,7 @@
  */
 
 use crate::SocketManager;
-use crate::handle::Channel;
+use crate::handle::{Completion, SocketHandler};
 use crate::handle::event::Event;
 use crate::handle::socket;
 use crate::utils::concurrent::ScheduledExecutorService;
@@ -45,7 +45,7 @@ impl ServerSocketChannel {
     }
 }
 
-impl Channel for ServerSocketChannel {
+impl SocketHandler for ServerSocketChannel {
     fn socket(&self) -> BorrowedSocket<'_> {
         self.listener.as_socket()
     }
@@ -70,11 +70,11 @@ impl Channel for ServerSocketChannel {
     fn handle(
         &mut self,
         manager: &mut ScheduledExecutorService,
-        data: io::Result<Event>,
+        completion: Completion,
     ) -> io::Result<bool> {
         self.queued -= 1;
         if let Ok(stream) =
-            data.and_then(|packet| socket::accepted(&self.listener, packet))
+            Event::from_completion(completion).and_then(|mut packet| socket::accepted(&self.listener, &mut packet))
         {
             let socket_manager = self.socket_manager.clone();
             self.socket_manager

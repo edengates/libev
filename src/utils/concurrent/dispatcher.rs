@@ -21,15 +21,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 
+/// Sends tasks to the thread of a [`ScheduledExecutorService`](crate::utils::concurrent::ScheduledExecutorService) and
+/// wakes it up.
 #[derive(Clone)]
-pub(crate) struct Dispatcher {
+pub struct Dispatcher {
     sender: Sender<Task>,
     port: Arc<CompletionService>,
     woken: Arc<AtomicBool>,
 }
 
 impl Dispatcher {
-    pub(crate) fn new(port: &Arc<CompletionService>) -> (Self, Receiver<Task>) {
+    /// Creates the dispatcher of the executor that uses `port`, together with the receiver of its tasks.
+    pub fn new(port: &Arc<CompletionService>) -> (Self, Receiver<Task>) {
         let (sender, receiver) = mpsc::channel();
         let dispatcher = Self {
             sender,
@@ -39,11 +42,17 @@ impl Dispatcher {
         (dispatcher, receiver)
     }
 
-    pub(crate) fn port(&self) -> &Arc<CompletionService> {
+    /// The completion service of the executor.
+    pub fn port(&self) -> &Arc<CompletionService> {
         &self.port
     }
 
-    pub(crate) fn dispatch(&self, task: Task) -> io::Result<()> {
+    /// Sends the `task` to the executor and wakes it up.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokenPipe`](io::ErrorKind::BrokenPipe) if the executor has been stopped.
+    pub fn dispatch(&self, task: Task) -> io::Result<()> {
         self.sender
             .send(task)
             .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))?;
@@ -53,7 +62,8 @@ impl Dispatcher {
         self.port.wakeup(DISPATCH).inspect_err(|_| self.woken.store(false, Ordering::SeqCst))
     }
 
-    pub(crate) fn reset(&self) {
+    /// Lets the next dispatched task wake up the executor again.
+    pub fn reset(&self) {
         self.woken.swap(false, Ordering::SeqCst);
     }
 }

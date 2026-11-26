@@ -16,9 +16,8 @@
 
 use crate::SocketManager;
 use crate::entities::channel::mixin::middleman::MessageChannelMixin;
-use crate::handle::Channel;
-use crate::handle::event::Event;
-use crate::handle::{BorrowedSocket, as_socket, socket};
+use crate::handle::SocketHandler;
+use crate::handle::{BorrowedSocket, Completion, as_socket, socket};
 use crate::utils::concurrent::ScheduledExecutorService;
 use bytes::BytesMut;
 use log::debug;
@@ -57,13 +56,13 @@ impl Drop for SocketChannelState {
     }
 }
 
-/// The [`Channel`] shared by the platform socket channels.
+/// The [`SocketHandler`] shared by the platform socket channels.
 pub(crate) trait SocketChannelMixin: Sized {
     fn state(&self) -> &SocketChannelState;
 
     fn state_mut(&mut self) -> &mut SocketChannelState;
 
-    fn handle_event(&mut self, manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool>;
+    fn handle_event(&mut self, manager: &mut ScheduledExecutorService, completion: Completion) -> io::Result<bool>;
 
     fn do_register(&self) -> io::Result<()> {
         Ok(())
@@ -90,7 +89,7 @@ pub(crate) trait SocketChannelMixin: Sized {
             socket_manager.close_timeout(),
         )?;
         state.channel.ready(manager);
-        Channel::execute(self, manager)
+        SocketHandler::execute(self, manager)
     }
 
     fn send(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<()> {
@@ -116,11 +115,11 @@ pub(crate) trait SocketChannelMixin: Sized {
         if let Some(size) = state.sending.take() {
             state.channel.handle_response(size);
         }
-        Channel::execute(self, manager)
+        SocketHandler::execute(self, manager)
     }
 }
 
-impl<T: SocketChannelMixin> Channel for T {
+impl<T: SocketChannelMixin> SocketHandler for T {
     fn socket(&self) -> BorrowedSocket<'_> {
         as_socket(&self.state().socket)
     }
@@ -138,8 +137,8 @@ impl<T: SocketChannelMixin> Channel for T {
         }
     }
 
-    fn handle(&mut self, manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool> {
-        self.handle_event(manager, data)
+    fn handle(&mut self, manager: &mut ScheduledExecutorService, completion: Completion) -> io::Result<bool> {
+        self.handle_event(manager, completion)
     }
 
     fn execute(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {

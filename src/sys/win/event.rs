@@ -14,14 +14,15 @@
  * limitations under the License.
  */
 
+use crate::handle::{Completion, Request};
 use bytes::{Buf, BufMut, BytesMut};
+use std::any::Any;
 use std::io;
 use std::mem;
 use std::os::windows::io::OwnedSocket;
 use std::ptr;
-use windows_sys::Win32::Foundation::{NTSTATUS, RtlNtStatusToDosError};
-use windows_sys::Win32::Networking::WinSock::{SOCKET_ERROR, WSABUF, WSAGetLastError, WSA_IO_PENDING};
-use windows_sys::Win32::System::IO::{OVERLAPPED, OVERLAPPED_ENTRY};
+use windows_sys::Win32::Networking::WinSock::WSABUF;
+use windows_sys::Win32::System::IO::OVERLAPPED;
 
 /// Once submitted, the packet must not be moved or released until Windows has completed the operation.
 /// The packet is found again from its `OVERLAPPED`, which must stay the first field.
@@ -63,6 +64,7 @@ impl Event {
         &self.buffers[0]
     }
 
+    #[cfg(test)]
     pub(crate) fn length(&self) -> usize {
         self.length
     }
@@ -95,83 +97,71 @@ impl Event {
         !self.buffers.is_empty()
     }
 
-    pub(crate) fn submit<F>(mut packet: Box<Event>, opcode: u32, call: F) -> io::Result<()>
+    pub(crate) fn start<F>(&mut self, opcode: u32, call: F) -> i32
     where
         F: FnOnce(&[WSABUF], *mut OVERLAPPED) -> i32,
     {
-        packet.opcode = opcode;
-        packet.overlapped = unsafe { mem::zeroed() };
-        let packet = Box::into_raw(packet);
-        let response = unsafe {
-            let packet = &mut *packet;
-            match opcode {
-                Event::READ | Event::ACCEPT => {
-                    let buffer = match packet.buffers.first_mut() {
-                        Some(buffer) => {
-                            let chunk = buffer.spare_capacity_mut();
-                            WSABUF {
-                                len: chunk.len() as u32,
-                                buf: chunk.as_mut_ptr().cast::<u8>(),
-                            }
+        self.opcode = opcode;
+        self.overlapped = unsafe { mem::zeroed() };
+        match opcode {
+            Event::READ | Event::ACCEPT => {
+                let buffer = match self.buffers.first_mut() {
+                    Some(buffer) => {
+                        let chunk = buffer.spare_capacity_mut();
+                        WSABUF {
+                            len: chunk.len() as u32,
+                            buf: chunk.as_mut_ptr().cast::<u8>(),
                         }
-                        None => WSABUF {
-                            len: 0,
-                            buf: ptr::NonNull::dangling().as_ptr(),
-                        },
-                    };
-                    call(&[buffer], &mut packet.overlapped)
-                }
-                _ => {
-                    let mut chunks = [WSABUF { len: 0, buf: ptr::null_mut() }; 16];
-                    let mut heap = Vec::new();
-                    let count = packet.buffers.len();
-                    let buffers = packet.buffers.iter_mut().map(|buffer| WSABUF {
-                        len: buffer.len() as u32,
-                        buf: buffer.as_mut_ptr(),
-                    });
-                    let buffers: &[WSABUF] = if count <= chunks.len() {
-                        for (chunk, buffer) in chunks.iter_mut().zip(buffers) {
-                            *chunk = buffer;
-                        }
-                        &chunks[..count]
-                    } else {
-                        heap.extend(buffers);
-                        &heap
-                    };
-                    call(buffers, &mut packet.overlapped)
-                }
+                    }
+                    None => WSABUF {
+                        len: 0,
+                        buf: ptr::NonNull::dangling().as_ptr(),
+                    },
+                };
+                call(&[buffer], &mut self.overlapped)
             }
-        };
-        if response == SOCKET_ERROR {
-            let code = unsafe { WSAGetLastError() };
-            if code != WSA_IO_PENDING {
-                drop(unsafe { Box::from_raw(packet) });
-                return Err(io::Error::from_raw_os_error(code));
+            _ => {
+                let mut chunks = [WSABUF { len: 0, buf: ptr::null_mut() }; 16];
+                let mut heap = Vec::new();
+                let count = self.buffers.len();
+                let buffers = self.buffers.iter_mut().map(|buffer| WSABUF {
+                    len: buffer.len() as u32,
+                    buf: buffer.as_mut_ptr(),
+                });
+                let buffers: &[WSABUF] = if count <= chunks.len() {
+                    for (chunk, buffer) in chunks.iter_mut().zip(buffers) {
+                        *chunk = buffer;
+                    }
+                    &chunks[..count]
+                } else {
+                    heap.extend(buffers);
+                    &heap
+                };
+                call(buffers, &mut self.overlapped)
             }
         }
-        Ok(())
     }
 
-    /// # Safety
-    ///
-    /// `entry` must come from [`CompletionService::poll`](crate::handle::CompletionService::poll), hold a packet
-    /// submitted by this module, and be handled only once.
-    pub(crate) unsafe fn from_entry(entry: &OVERLAPPED_ENTRY) -> io::Result<Box<Self>> {
-        let mut packet = unsafe { Box::from_raw(entry.lpOverlapped as *mut Self) };
-        let status = packet.overlapped.Internal as NTSTATUS;
-        if status != 0 {
-            return Err(io::Error::from_raw_os_error(
-                unsafe { RtlNtStatusToDosError(status) } as i32,
-            ));
-        }
-        packet.length = entry.dwNumberOfBytesTransferred as usize;
+    pub(crate) fn from_completion(completion: Completion) -> io::Result<Box<Self>> {
+        let length = completion.transferred();
+        let mut packet = completion.into_request::<Self>()?;
+        packet.length = length;
         if packet.opcode == Event::READ {
-            let length = packet.length();
             if let Some(buffer) = packet.buffers.first_mut() {
                 unsafe { buffer.advance_mut(length) }
             }
         }
         Ok(packet)
+    }
+}
+
+impl Request for Event {
+    fn overlapped(&mut self) -> *mut OVERLAPPED {
+        &raw mut self.overlapped
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
     }
 }
 

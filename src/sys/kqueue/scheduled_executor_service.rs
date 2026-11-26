@@ -35,7 +35,14 @@ impl EventArray {
 }
 
 impl ScheduledExecutorService {
-    pub(crate) fn run_worker(&mut self) -> io::Result<()> {
+    /// The number of operations that have been submitted and have not completed yet, always `0` as kqueue only
+    /// reports the readiness of sockets.
+    pub fn pending(&self) -> usize {
+        0
+    }
+
+    /// Waits for events, at most until the next scheduled task is due, and passes them to their handlers.
+    pub fn run_worker(&mut self) -> io::Result<()> {
         let mut entries = mem::take(&mut self.array.entries);
         let data = self.port.poll(&mut entries, self.queue.timeout());
         if let Ok(count) = data {
@@ -47,7 +54,8 @@ impl ScheduledExecutorService {
         data.map(|_| ())
     }
 
-    pub(crate) fn submit<S: AsRawFd>(&mut self, socket: &S, filter: fn(RawFd) -> EventFilter, is_enabled: bool) -> io::Result<()> {
+    /// Enables or disables the `filter` of `socket` for the handler that is being handled.
+    pub fn submit<S: AsRawFd>(&mut self, socket: &S, filter: fn(RawFd) -> EventFilter, is_enabled: bool) -> io::Result<()> {
         self.port.modify(socket, self.socket_id, filter, is_enabled)
     }
 
@@ -62,7 +70,8 @@ impl ScheduledExecutorService {
         }
     }
 
-    pub(crate) fn close(&mut self) {
+    /// Closes all handlers.
+    pub fn close(&mut self) {
         self.close_sockets();
     }
 }

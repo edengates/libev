@@ -29,11 +29,12 @@ pub struct CompletionService {
 
 impl CompletionService {
     /// Returns a new factory that creates IOCP instances.
-    pub(crate) fn new_factory() -> fn(u32) -> io::Result<Self> {
+    pub fn new_factory() -> fn(u32) -> io::Result<Self> {
         |_| Self::new()
     }
 
-    pub(crate) fn new() -> io::Result<Self> {
+    /// Creates a new IOCP instance.
+    pub fn new() -> io::Result<Self> {
         let handle = unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, ptr::null_mut(), 0, 1) };
         if handle.is_null() {
             Err(io::Error::last_os_error())

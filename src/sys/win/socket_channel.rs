@@ -15,7 +15,8 @@
  */
 
 use crate::SocketManager;
-use crate::handle::Channel;
+use crate::handle::SocketHandler;
+use crate::handle::Completion;
 use crate::handle::socket;
 use crate::handle::event::Event;
 use crate::handle::{SocketChannelMixin, SocketChannelState};
@@ -90,8 +91,8 @@ impl SocketChannelMixin for SocketChannel {
         &mut self.state
     }
 
-    fn handle_event(&mut self, manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool> {
-        let Ok(content) = data else {
+    fn handle_event(&mut self, manager: &mut ScheduledExecutorService, completion: Completion) -> io::Result<bool> {
+        let Ok(mut content) = Event::from_completion(completion) else {
             return Ok(false);
         };
         match content.opcode() {
@@ -100,6 +101,7 @@ impl SocketChannelMixin for SocketChannel {
                 self.on_connected(manager)
             }
             Event::READ => self.read(manager),
+            Event::WRITE if content.advance() => Ok(manager.write(&self.state.socket, content).is_ok()),
             Event::WRITE => self.handle_response(manager),
             _ => Ok(false),
         }

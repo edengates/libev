@@ -16,10 +16,9 @@
 
 use crate::events::{Event, GenericEvent};
 
-/// Indicates that the [AFK timeout] of a [`MessageChannel`] has been reached.
+/// Indicates that the [AFK timeout] of a `Channel` has been reached.
 ///
 /// [AFK timeout]: crate::DefaultSocketManagerBuilder::set_afk_timeout
-/// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
 pub struct ChannelTimeoutEvent;
 
 impl ChannelTimeoutEvent {

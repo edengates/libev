@@ -63,7 +63,7 @@ fn handle(manager: &mut ScheduledExecutorService, entry: &epoll::Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::handle::Channel;
+    use crate::handle::SocketHandler;
     use crate::DefaultSocketManagerBuilder;
     use crate::hooks::ListenerAdapter;
     use crate::utils::concurrent::ScheduledThreadPoolExecutor;
@@ -86,7 +86,7 @@ mod tests {
         sender: Sender<bool>,
     }
 
-    impl Channel for AcceptChannel {
+    impl SocketHandler for AcceptChannel {
         fn socket(&self) -> BorrowedFd<'_> {
             self.listener.as_fd()
         }

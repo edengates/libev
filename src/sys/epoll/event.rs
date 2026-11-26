@@ -25,11 +25,13 @@ impl Event {
         Self { flags }
     }
 
-    pub(crate) fn is_readable(&self) -> bool {
+    /// Whether the socket is ready to be read, or has failed or hung up.
+    pub fn is_readable(&self) -> bool {
         self.flags.intersects(EventFlags::ERR | EventFlags::IN | EventFlags::HUP)
     }
 
-    pub(crate) fn is_writable(&self) -> bool {
+    /// Whether the socket is ready to be written, or has failed.
+    pub fn is_writable(&self) -> bool {
         self.flags.intersects(EventFlags::ERR | EventFlags::OUT)
     }
 }

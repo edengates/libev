@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::handle::Request;
 use bytes::BytesMut;
 
 pub struct Event {
@@ -21,6 +22,7 @@ pub struct Event {
     res: i32,
     buffer: Option<BytesMut>,
     more: bool,
+    request: Option<Box<dyn Request>>,
 }
 
 impl Event {
@@ -30,22 +32,37 @@ impl Event {
             res,
             buffer,
             more,
+            request: None,
         }
     }
 
-    pub(crate) fn more(&self) -> bool {
+    pub(crate) fn with_request(mut self, request: Option<Box<dyn Request>>) -> Self {
+        self.request = request;
+        self
+    }
+
+    /// Returns the request that was submitted for the operation, if it is an `R`.
+    pub fn into_request<R: Request>(self) -> Option<Box<R>> {
+        self.request?.into_any().downcast::<R>().ok()
+    }
+
+    /// Whether more completions follow for the same operation.
+    pub fn more(&self) -> bool {
         self.more
     }
 
-    pub(crate) fn opcode(&self) -> u8 {
+    /// The code of the operation.
+    pub fn opcode(&self) -> u8 {
         self.opcode
     }
 
-    pub(crate) fn result(&self) -> i32 {
+    /// The result of the operation.
+    pub fn result(&self) -> i32 {
         self.res
     }
 
-    pub(crate) fn into_body(self) -> Option<BytesMut> {
+    /// Returns the buffer that the operation has filled, if it had one.
+    pub fn into_body(self) -> Option<BytesMut> {
         self.buffer
     }
 }

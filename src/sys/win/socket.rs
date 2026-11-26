@@ -56,7 +56,7 @@ pub(crate) fn client(address: &SocketAddr) -> io::Result<TcpStream> {
     Ok(TcpStream::from(socket(address.is_ipv4())?))
 }
 
-pub(crate) fn accepted(listener: &TcpListener, mut packet: Event) -> io::Result<TcpStream> {
+pub(crate) fn accepted(listener: &TcpListener, packet: &mut Event) -> io::Result<TcpStream> {
     let socket = packet.take_socket().ok_or(io::ErrorKind::InvalidInput)?;
     set_option(&socket, SO_UPDATE_ACCEPT_CONTEXT, Some(&(listener.as_raw_socket() as SOCKET)))?;
     Ok(TcpStream::from(socket))

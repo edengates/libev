@@ -14,4 +14,6 @@
  * limitations under the License.
  */
 
+mod channel_mixin;
+pub use channel_mixin::ChannelMixin;
 pub mod middleman;

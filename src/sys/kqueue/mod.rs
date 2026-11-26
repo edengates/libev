@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-pub(crate) mod event;
+pub mod event;
 mod completion_service;
 pub use completion_service::CompletionService;
 mod scheduled_executor_service;
