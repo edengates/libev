@@ -146,6 +146,7 @@ mod linux {
         pub(in crate::handle) entries: Vec<poll::Event>,
         pub(in crate::handle) response_total: usize,
         pub(in crate::handle) buffer_ring: Option<BufferRing>,
+        pub(in crate::handle) buffer_ring_entries: Option<u16>,
         pub(in crate::handle) writes: FxHashMap<usize, (Vec<BytesMut>, Vec<IoSlice<'static>>)>,
         pub(in crate::handle) addresses: FxHashMap<usize, Box<SockAddr>>,
         pub(in crate::handle) requests: FxHashMap<u64, Box<dyn Request>>,
@@ -154,17 +155,17 @@ mod linux {
 
     impl EventArray {
         pub(crate) fn new(port: &Arc<CompletionService>, capacity: usize) -> Self {
-            let buffer_ring = match &**port {
-                CompletionService::IoUring(ring) => ring
-                    .enable()
-                    .and_then(|_| BufferRing::new(port, capacity.max(2).next_power_of_two() as u16, 16384))
-                    .ok(),
+            let buffer_ring_entries = match &**port {
+                CompletionService::IoUring(ring) => {
+                    ring.enable().ok().map(|_| capacity.max(2).next_power_of_two() as u16)
+                }
                 CompletionService::Epoll(_) => None,
             };
             Self {
                 entries: vec![poll::Event { flags: EventFlags::empty(), data: EventData::new_u64(0) }; capacity.max(1)],
                 response_total: 0,
-                buffer_ring,
+                buffer_ring: None,
+                buffer_ring_entries,
                 writes: FxHashMap::default(),
                 addresses: FxHashMap::default(),
                 requests: FxHashMap::default(),

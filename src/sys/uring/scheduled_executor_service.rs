@@ -125,6 +125,10 @@ fn complete(manager: &mut ScheduledExecutorService, res: i32, flags: u32, user_d
 impl ScheduledExecutorService {
     pub(crate) fn read<S: AsRawFd>(&mut self, socket: &S) -> io::Result<()> {
         let port = ring(&self.port)?;
+        if self.array.buffer_ring.is_none() {
+            let entries = self.array.buffer_ring_entries.ok_or(io::ErrorKind::Unsupported)?;
+            self.array.buffer_ring = Some(handle::uring::BufferRing::new(&self.port, entries, 16384)?);
+        }
         let buffer_ring = self.array.buffer_ring.as_ref().ok_or(io::ErrorKind::Unsupported)?;
         let user_data = user_data(self.socket_id, opcode::Recv::CODE);
         let fd = types::Fd(socket.as_raw_fd());
@@ -343,6 +347,7 @@ mod tests {
         manager.run_worker().unwrap();
 
         assert!(receiver.recv_timeout(Duration::from_secs(5)).unwrap());
+        assert!(manager.array.buffer_ring.is_none());
         assert!(manager.array.requests.is_empty());
         assert_eq!(manager.array.response_total, 0);
     }
@@ -364,6 +369,7 @@ mod tests {
     #[test]
     fn echo() {
         let mut manager = manager();
+        assert!(manager.array.buffer_ring.is_none());
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         manager.register(Box::new(AcceptChannel { listener })).unwrap();
@@ -384,6 +390,7 @@ mod tests {
             manager.execute();
         }
         let mut client = client.join().unwrap();
+        assert!(manager.array.buffer_ring.is_some());
         assert_eq!(manager.sockets.len(), 2);
 
         manager.close();
