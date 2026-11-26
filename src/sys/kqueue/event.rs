@@ -26,11 +26,13 @@ impl Event {
         Self { filter, flags }
     }
 
-    pub(crate) fn is_readable(&self) -> bool {
+    /// Whether the socket is ready to be read, or has reached the end of the stream.
+    pub fn is_readable(&self) -> bool {
         matches!(self.filter, EventFilter::Read(_)) || self.flags.contains(EventFlags::EOF)
     }
 
-    pub(crate) fn is_writable(&self) -> bool {
+    /// Whether the socket is ready to be written.
+    pub fn is_writable(&self) -> bool {
         matches!(self.filter, EventFilter::Write(_))
     }
 }

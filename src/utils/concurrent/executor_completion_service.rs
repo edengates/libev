@@ -15,7 +15,7 @@
  */
 
 use crate::utils::concurrent::{DelayedCompletableFuture, ThreadPerTaskExecutor};
-use crate::handle::Channel;
+use crate::handle::SocketHandler;
 use crate::handle::CompletionService;
 use crate::utils::concurrent::{Dispatcher, ScheduledExecutorService, SHUTDOWN, Task};
 use log::error;
@@ -43,7 +43,10 @@ impl ExecutorCompletionService {
         Self::with_factory(executor, capacity, CompletionService::new_factory())
     }
 
-    pub(crate) fn with_factory(
+    /// Starts the thread of this manager on the `executor`, with the completion service that the `factory` creates.
+    ///
+    /// The `capacity` is the maximum number of events handled per poll.
+    pub fn with_factory(
         executor: &ThreadPerTaskExecutor,
         capacity: usize,
         factory: fn(u32) -> io::Result<CompletionService>,
@@ -83,7 +86,8 @@ impl ExecutorCompletionService {
         })
     }
 
-    pub(crate) fn port(&self) -> &CompletionService {
+    /// The completion service of this manager.
+    pub fn port(&self) -> &CompletionService {
         &self.port
     }
 
@@ -118,10 +122,10 @@ impl ExecutorCompletionService {
         self.submit(Box::new(move |manager: &mut ScheduledExecutorService| manager.enqueue(Box::pin(future))))
     }
 
-    /// The `handler` function creates the [`Channel`] on the thread of this manager.
-    pub(crate) fn register<F>(&self, handler: F) -> Receiver<io::Result<()>>
+    /// The `handler` function creates the [`SocketHandler`] on the thread of this manager.
+    pub fn register<F>(&self, handler: F) -> Receiver<io::Result<()>>
     where
-        F: FnOnce() -> Box<dyn Channel> + Send + 'static,
+        F: FnOnce() -> Box<dyn SocketHandler> + Send + 'static,
     {
         let (sender, receiver) = mpsc::channel();
         let request = Registration { handler, callback: sender.clone() };
@@ -167,7 +171,7 @@ struct Registration<F> {
     callback: Sender<io::Result<()>>,
 }
 
-impl<F: FnOnce() -> Box<dyn Channel>> Registration<F> {
+impl<F: FnOnce() -> Box<dyn SocketHandler>> Registration<F> {
     fn run(self, manager: &mut ScheduledExecutorService) {
         self.callback.send(manager.register((self.handler)())).ok();
     }
@@ -177,6 +181,8 @@ impl<F: FnOnce() -> Box<dyn Channel>> Registration<F> {
 mod tests {
     use super::*;
     use crate::utils::concurrent::CountingThreadFactory;
+    use crate::handle::Completion;
+    #[cfg(windows)]
     use crate::handle::event::Event;
     #[cfg(windows)]
     use crate::handle::socket;
@@ -334,7 +340,7 @@ mod tests {
         listener: TcpListener,
     }
 
-    impl Channel for ServerSocketChannelAdapter {
+    impl SocketHandler for ServerSocketChannelAdapter {
         #[cfg(unix)]
         fn socket(&self) -> BorrowedFd<'_> {
             self.listener.as_fd()
@@ -356,7 +362,7 @@ mod tests {
         }
 
         #[cfg(unix)]
-        fn handle(&mut self, manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool> {
+        fn handle(&mut self, manager: &mut ScheduledExecutorService, data: Completion) -> io::Result<bool> {
             data?;
             let (stream, _) = self.listener.accept()?;
             stream.set_nonblocking(true)?;
@@ -365,8 +371,8 @@ mod tests {
         }
 
         #[cfg(windows)]
-        fn handle(&mut self, manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool> {
-            let stream = socket::accepted(&self.listener, data?)?;
+        fn handle(&mut self, manager: &mut ScheduledExecutorService, data: Completion) -> io::Result<bool> {
+            let stream = socket::accepted(&self.listener, &mut *Event::from_completion(data)?)?;
             manager.register(Box::new(MessageCreateHandler { stream }))?;
             manager.accept(&self.listener)?;
             Ok(true)
@@ -377,7 +383,7 @@ mod tests {
         stream: TcpStream,
     }
 
-    impl Channel for MessageCreateHandler {
+    impl SocketHandler for MessageCreateHandler {
         #[cfg(unix)]
         fn socket(&self) -> BorrowedFd<'_> {
             self.stream.as_fd()
@@ -393,7 +399,7 @@ mod tests {
         }
 
         #[cfg(unix)]
-        fn handle(&mut self, _manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool> {
+        fn handle(&mut self, _manager: &mut ScheduledExecutorService, data: Completion) -> io::Result<bool> {
             data?;
             let mut buffer = [0; 16];
             match (&self.stream).read(&mut buffer) {
@@ -405,8 +411,8 @@ mod tests {
         }
 
         #[cfg(windows)]
-        fn handle(&mut self, manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool> {
-            let packet = data?;
+        fn handle(&mut self, manager: &mut ScheduledExecutorService, data: Completion) -> io::Result<bool> {
+            let packet = Event::from_completion(data)?;
             match packet.opcode() {
                 Event::READ if packet.length() == 0 => Ok(false),
                 Event::READ => {
@@ -422,7 +428,7 @@ mod tests {
         listener: TcpListener,
     }
 
-    impl Channel for ErrorChannel {
+    impl SocketHandler for ErrorChannel {
         #[cfg(unix)]
         fn socket(&self) -> BorrowedFd<'_> {
             self.listener.as_fd()
@@ -437,7 +443,7 @@ mod tests {
             Err(io::ErrorKind::InvalidInput.into())
         }
 
-        fn handle(&mut self, _manager: &mut ScheduledExecutorService, _data: io::Result<Event>) -> io::Result<bool> {
+        fn handle(&mut self, _manager: &mut ScheduledExecutorService, _data: Completion) -> io::Result<bool> {
             Ok(false)
         }
     }
@@ -448,7 +454,7 @@ mod tests {
         count: usize,
     }
 
-    impl Channel for ReconnectChannel {
+    impl SocketHandler for ReconnectChannel {
         #[cfg(unix)]
         fn socket(&self) -> BorrowedFd<'_> {
             self.listener.as_fd()
@@ -468,7 +474,7 @@ mod tests {
             Ok(true)
         }
 
-        fn handle(&mut self, _manager: &mut ScheduledExecutorService, _data: io::Result<Event>) -> io::Result<bool> {
+        fn handle(&mut self, _manager: &mut ScheduledExecutorService, _data: Completion) -> io::Result<bool> {
             Ok(false)
         }
     }
@@ -477,7 +483,7 @@ mod tests {
         stream: TcpStream,
     }
 
-    impl Channel for InvalidChannel {
+    impl SocketHandler for InvalidChannel {
         #[cfg(unix)]
         fn socket(&self) -> BorrowedFd<'_> {
             self.stream.as_fd()
@@ -492,7 +498,7 @@ mod tests {
             receive(manager, &self.stream)
         }
 
-        fn handle(&mut self, _manager: &mut ScheduledExecutorService, _data: io::Result<Event>) -> io::Result<bool> {
+        fn handle(&mut self, _manager: &mut ScheduledExecutorService, _data: Completion) -> io::Result<bool> {
             panic!()
         }
     }
@@ -501,7 +507,7 @@ mod tests {
         listener: TcpListener,
     }
 
-    impl Channel for LockedChannel {
+    impl SocketHandler for LockedChannel {
         #[cfg(unix)]
         fn socket(&self) -> BorrowedFd<'_> {
             self.listener.as_fd()
@@ -516,7 +522,7 @@ mod tests {
             Ok(true)
         }
 
-        fn handle(&mut self, _manager: &mut ScheduledExecutorService, _data: io::Result<Event>) -> io::Result<bool> {
+        fn handle(&mut self, _manager: &mut ScheduledExecutorService, _data: Completion) -> io::Result<bool> {
             Ok(true)
         }
 

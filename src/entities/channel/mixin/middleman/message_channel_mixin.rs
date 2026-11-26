@@ -17,6 +17,7 @@
 use crate::SocketManager;
 use crate::entities::ISnowflake;
 use crate::entities::channel::concrete::ThreadChannel;
+use crate::entities::channel::mixin::ChannelMixin;
 use crate::events::channel::update::ChannelUpdateSlowmodeEvent;
 use crate::events::channel::{ChannelDisconnectEvent, ChannelReadyEvent, ChannelTimeoutEvent};
 use crate::events::message::MessageReceivedEvent;
@@ -90,7 +91,7 @@ impl MessageChannelMixin {
 
     pub(crate) fn ready(self: &Rc<Self>, manager: &mut ScheduledExecutorService) {
         self.is_ready.set(true);
-        manager.add_channel(self.thread_channel.id(), self);
+        manager.add_channel(self.thread_channel.id(), self.clone());
         if let Some(top) = self.top.take() {
             self.socket_manager.channel_cache().add(self.thread_channel.id(), top);
         }
@@ -159,5 +160,15 @@ impl MessageChannelMixin {
             self.connect(true);
             manager.enqueue(Rc::clone(&self.proxy).handle(Rc::clone(self)));
         }
+    }
+}
+
+impl ChannelMixin for MessageChannelMixin {
+    fn channels(&self) -> &RefCell<Vec<Box<dyn Any>>> {
+        MessageChannelMixin::channels(self)
+    }
+
+    fn wake(self: Rc<Self>, manager: &mut ScheduledExecutorService) {
+        MessageChannelMixin::wake(&self, manager);
     }
 }

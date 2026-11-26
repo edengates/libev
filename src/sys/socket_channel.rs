@@ -16,7 +16,7 @@
 
 use crate::SocketManager;
 use crate::entities::channel::mixin::middleman::MessageChannelMixin;
-use crate::handle::Channel;
+use crate::handle::SocketHandler;
 use crate::handle::{self, READABLE, WRITABLE};
 use crate::utils::concurrent::ScheduledExecutorService;
 use crate::handle::event::Event;
@@ -192,7 +192,7 @@ impl SocketChannel {
     }
 }
 
-impl Channel for SocketChannel {
+impl SocketHandler for SocketChannel {
     fn execute(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
         self.channel.execute(manager);
         while self.send()? {

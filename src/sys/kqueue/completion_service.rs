@@ -29,11 +29,12 @@ pub struct CompletionService {
 
 impl CompletionService {
     /// Returns a new factory that creates kqueue instances.
-    pub(crate) fn new_factory() -> fn(u32) -> io::Result<Self> {
+    pub fn new_factory() -> fn(u32) -> io::Result<Self> {
         |_| Self::new()
     }
 
-    pub(crate) fn new() -> io::Result<Self> {
+    /// Creates a new kqueue instance.
+    pub fn new() -> io::Result<Self> {
         let manager = Self {
             kqueue_fd: kqueue::kqueue()?,
             is_shutdown: AtomicBool::new(false),

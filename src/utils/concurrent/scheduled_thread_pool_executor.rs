@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::handle::CompletionService;
 use crate::utils::concurrent::{CountingThreadFactory, ThreadPerTaskExecutor, ExecutorCompletionService};
 use futures_core::future::LocalBoxFuture;
 use log::error;
@@ -46,11 +47,29 @@ impl ScheduledThreadPoolExecutor {
     ///
     /// [`available_parallelism`]: thread::available_parallelism
     pub fn new(shards_total: usize, capacity: usize) -> io::Result<Self> {
+        Self::with_factory(shards_total, capacity, CompletionService::new_factory())
+    }
+
+    /// Creates `shards_total` shards, each with the completion service that the `factory` creates.
+    ///
+    /// If `shards_total` is 0, libev will select the number of shards automatically: `2 *` [`available_parallelism`].
+    /// The `capacity` is the maximum number of events handled per poll.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if one of the shards could not be created.
+    ///
+    /// [`available_parallelism`]: thread::available_parallelism
+    pub fn with_factory(
+        shards_total: usize,
+        capacity: usize,
+        factory: fn(u32) -> io::Result<CompletionService>,
+    ) -> io::Result<Self> {
         let shards_total = if shards_total == 0 { default_shard_total() } else { shards_total };
         let manager = ThreadPerTaskExecutor::new(CountingThreadFactory::of::<Self>("Scheduler"));
         let mut shards = Vec::with_capacity(shards_total);
         for _ in 0..shards_total {
-            shards.push(ExecutorCompletionService::new(&manager, capacity)?);
+            shards.push(ExecutorCompletionService::with_factory(&manager, capacity, factory)?);
         }
 
         Ok(Self {

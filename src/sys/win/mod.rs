@@ -18,7 +18,7 @@ use crate::SocketManager;
 use crate::utils::concurrent::ExecutorCompletionService;
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-pub(crate) use std::os::windows::io::BorrowedSocket;
+pub use std::os::windows::io::BorrowedSocket;
 use std::os::windows::io::AsSocket;
 use std::sync::mpsc::Receiver;
 use windows_sys::Win32::System::Threading::{
@@ -26,7 +26,9 @@ use windows_sys::Win32::System::Threading::{
     THREAD_POWER_THROTTLING_EXECUTION_SPEED, THREAD_POWER_THROTTLING_STATE, ThreadPowerThrottling,
 };
 
-pub(crate) fn set_power_suppressed(is_power_suppressed_enabled: bool) {
+/// Asks Windows to run the current thread at full speed, unless `is_power_suppressed_enabled` allows to suppress the
+/// power of the thread to save energy.
+pub fn set_power_suppressed(is_power_suppressed_enabled: bool) {
     let state = THREAD_POWER_THROTTLING_STATE {
         Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
         ControlMask: if is_power_suppressed_enabled { 0 } else { THREAD_POWER_THROTTLING_EXECUTION_SPEED },
@@ -45,7 +47,9 @@ pub(crate) fn set_power_suppressed(is_power_suppressed_enabled: bool) {
 #[path = "../option.rs"]
 mod option;
 pub(crate) mod socket;
-pub(crate) mod event;
+pub mod event;
+mod completion;
+pub use completion::Completion;
 mod completion_service;
 pub use completion_service::CompletionService;
 mod scheduled_executor_service;

@@ -15,7 +15,7 @@
  */
 
 use crate::SocketManager;
-use crate::handle::Channel;
+use crate::handle::SocketHandler;
 use crate::handle::event::Event;
 use crate::handle::{SocketChannelMixin, SocketChannelState};
 use crate::utils::concurrent::ScheduledExecutorService;

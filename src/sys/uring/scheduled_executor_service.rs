@@ -20,6 +20,7 @@ use io_uring::{cqueue, opcode, squeue, types};
 use crate::handle;
 use socket2::SockAddr;
 use crate::handle::event::Event;
+use crate::handle::Request;
 use crate::utils::concurrent::{ScheduledExecutorService, DISPATCH, SHUTDOWN};
 use crate::utils::buffer;
 use bytes::BytesMut;
@@ -68,6 +69,7 @@ pub(crate) fn close(manager: &mut ScheduledExecutorService, port: &CompletionSer
                 manager.array.response_total -= 1;
                 manager.array.writes.remove(&key);
                 manager.array.addresses.remove(&key);
+                manager.array.requests.remove(&user_data);
             }
         });
         if data.is_err() {
@@ -85,6 +87,12 @@ fn complete(manager: &mut ScheduledExecutorService, res: i32, flags: u32, user_d
     let more = cqueue::more(flags);
     if !more {
         manager.array.response_total -= 1;
+    }
+    if user_data & 0xFFFF != 0 {
+        let request = manager.array.requests.remove(&user_data);
+        let event = event::Event::new(opcode, res, None, more).with_request(request);
+        manager.handle_event(key, |handle, manager| matches!(handle.handle(manager, Ok(Event::IoUring(event))), Ok(true)));
+        return;
     }
     let buffer = match opcode {
         opcode::Recv::CODE if res > 0 => cqueue::buffer_select(flags).and_then(|bid| {
@@ -133,6 +141,23 @@ impl ScheduledExecutorService {
         Ok(())
     }
 
+    /// Queues the `entry` for the handler that is being handled.
+    ///
+    /// The `opcode` is the code of the operation of the `entry`. The request is kept until the operation has completed,
+    /// then it is passed to the handler with the event, see [`Event::into_request`](crate::handle::event::Event).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Unsupported`](io::ErrorKind::Unsupported) if this executor uses epoll, or the error of the queue.
+    pub fn submit_request(&mut self, entry: squeue::Entry, opcode: u8, request: Box<dyn Request>) -> io::Result<()> {
+        let port = ring(&self.port)?;
+        let user_data = user_data(self.socket_id, opcode) | self.array.next_slot() as u64;
+        port.enqueue_sqe(entry.user_data(user_data))?;
+        self.array.requests.insert(user_data, request);
+        self.array.response_total += 1;
+        Ok(())
+    }
+
     pub(crate) fn is_multishot_enabled(&self) -> bool {
         ring(&self.port).is_ok_and(CompletionService::is_multishot_enabled)
     }
@@ -176,7 +201,12 @@ impl ScheduledExecutorService {
         Ok(())
     }
 
-    pub(crate) fn cancel<S: AsRawFd>(&mut self, socket: &S) -> io::Result<()> {
+    /// Cancels all operations that are in flight on `socket`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Unsupported`](io::ErrorKind::Unsupported) if this executor uses epoll, or the error of the queue.
+    pub fn cancel<S: AsRawFd>(&mut self, socket: &S) -> io::Result<()> {
         let port = ring(&self.port)?;
         let cancel = opcode::AsyncCancel2::new(types::CancelBuilder::fd(types::Fd(socket.as_raw_fd())).all());
         port.enqueue_sqe(cancel.build().user_data(user_data(DISPATCH, opcode::AsyncCancel2::CODE)))?;
@@ -187,10 +217,12 @@ impl ScheduledExecutorService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::handle::Channel;
+    use crate::handle::SocketHandler;
+    use std::any::Any;
     use std::io::{Read, Write};
     use std::os::fd::{AsFd, BorrowedFd, FromRawFd};
     use std::sync::Arc;
+    use std::sync::mpsc::{self, Sender};
     use std::thread;
     use std::time::Duration;
 
@@ -198,7 +230,7 @@ mod tests {
         listener: TcpListener,
     }
 
-    impl Channel for AcceptChannel {
+    impl SocketHandler for AcceptChannel {
         fn socket(&self) -> BorrowedFd<'_> {
             self.listener.as_fd()
         }
@@ -225,7 +257,7 @@ mod tests {
         stream: TcpStream,
     }
 
-    impl Channel for EchoChannel {
+    impl SocketHandler for EchoChannel {
         fn socket(&self) -> BorrowedFd<'_> {
             self.stream.as_fd()
         }
@@ -257,12 +289,81 @@ mod tests {
         }
     }
 
-    #[test]
-    fn echo() {
+    struct Probe;
+
+    impl Request for Probe {
+        fn into_any(self: Box<Self>) -> Box<dyn Any> {
+            self
+        }
+    }
+
+    struct QueueChannel {
+        listener: TcpListener,
+        sender: Sender<bool>,
+        pending: bool,
+    }
+
+    impl SocketHandler for QueueChannel {
+        fn socket(&self) -> BorrowedFd<'_> {
+            self.listener.as_fd()
+        }
+
+        fn on_registered(&mut self, manager: &mut ScheduledExecutorService) -> io::Result<bool> {
+            if self.pending {
+                let poll = opcode::PollAdd::new(types::Fd(self.listener.as_raw_fd()), rustix::event::PollFlags::IN.bits() as u32);
+                manager.submit_request(poll.build(), opcode::PollAdd::CODE, Box::new(Probe)).map(|_| true)
+            } else {
+                manager.submit_request(opcode::Nop::new().build(), opcode::Nop::CODE, Box::new(Probe)).map(|_| true)
+            }
+        }
+
+        fn handle(&mut self, _manager: &mut ScheduledExecutorService, data: io::Result<Event>) -> io::Result<bool> {
+            let Event::IoUring(packet) = data? else {
+                return Ok(false);
+            };
+            self.sender.send(packet.into_request::<Probe>().is_some()).ok();
+            Ok(true)
+        }
+    }
+
+    fn manager() -> ScheduledExecutorService {
         let port = crate::handle::uring::CompletionService::new_factory()(64).unwrap();
         let port = Arc::new(port);
         let dispatcher = crate::utils::concurrent::Dispatcher::new(&port).0;
-        let mut manager = ScheduledExecutorService::new(port, dispatcher, 64);
+        ScheduledExecutorService::new(port, dispatcher, 64)
+    }
+
+    #[test]
+    fn queue() {
+        let mut manager = manager();
+        let (sender, receiver) = mpsc::channel();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        manager.register(Box::new(QueueChannel { listener, sender, pending: false })).unwrap();
+
+        manager.run_worker().unwrap();
+
+        assert!(receiver.recv_timeout(Duration::from_secs(5)).unwrap());
+        assert!(manager.array.requests.is_empty());
+        assert_eq!(manager.array.response_total, 0);
+    }
+
+    #[test]
+    fn queue_close() {
+        let mut manager = manager();
+        let (sender, _receiver) = mpsc::channel();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        manager.register(Box::new(QueueChannel { listener, sender, pending: true })).unwrap();
+        assert_eq!(manager.array.requests.len(), 1);
+
+        manager.close();
+
+        assert!(manager.array.requests.is_empty());
+        assert_eq!(manager.array.response_total, 0);
+    }
+
+    #[test]
+    fn echo() {
+        let mut manager = manager();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         manager.register(Box::new(AcceptChannel { listener })).unwrap();

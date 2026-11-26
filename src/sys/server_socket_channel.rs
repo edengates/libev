@@ -15,7 +15,7 @@
  */
 
 use crate::SocketManager;
-use crate::handle::Channel;
+use crate::handle::SocketHandler;
 use crate::handle::event::Event;
 use crate::handle::socket;
 use crate::handle::{self, READABLE};
@@ -47,7 +47,7 @@ impl ServerSocketChannel {
     }
 }
 
-impl Channel for ServerSocketChannel {
+impl SocketHandler for ServerSocketChannel {
     fn socket(&self) -> BorrowedFd<'_> {
         self.listener.as_fd()
     }

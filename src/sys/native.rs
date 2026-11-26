@@ -22,7 +22,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::fd::AsFd;
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
 use std::os::fd::AsRawFd;
-pub(crate) use std::os::fd::BorrowedFd as BorrowedSocket;
+pub use std::os::fd::BorrowedFd as BorrowedSocket;
 use std::sync::mpsc::Receiver;
 
 #[cfg(target_os = "linux")]
@@ -34,14 +34,16 @@ pub(crate) mod uring;
 #[cfg(target_os = "linux")]
 pub use linux::{CompletionService, EventArray};
 #[cfg(target_os = "linux")]
-pub(crate) use linux::event;
+pub use linux::event;
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
 #[path = "kqueue/mod.rs"]
 pub(crate) mod kqueue;
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub use kqueue::{CompletionService, EventArray};
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
-pub(crate) use kqueue::event;
+pub use kqueue::event;
+/// An operation that has completed or an event of a socket, or the error it has failed with.
+pub type Completion = io::Result<event::Event>;
 #[path = "option.rs"]
 mod option;
 #[path = "socket.rs"]
@@ -66,6 +68,7 @@ pub(crate) const WRITABLE: u32 = 2;
 mod linux {
     use super::{epoll, uring};
     use crate::utils::concurrent::ScheduledExecutorService;
+    use crate::handle::Request;
     use bytes::BytesMut;
     use rustc_hash::FxHashMap;
     use rustix::event::epoll::{self as poll, EventData, EventFlags};
@@ -75,20 +78,23 @@ mod linux {
     use std::sync::Arc;
     use uring::BufferRing;
 
-    pub(crate) mod event {
+    pub mod event {
         use super::super::{epoll, uring};
 
+        /// A completed operation of io_uring, or the readiness of a socket reported by epoll.
         pub enum Event {
             Epoll(epoll::event::Event),
             IoUring(uring::event::Event),
         }
 
         impl Event {
-            pub(crate) fn is_readable(&self) -> bool {
+            /// Whether the socket is ready to be read. Always `false` for io_uring.
+            pub fn is_readable(&self) -> bool {
                 matches!(self, Self::Epoll(packet) if packet.is_readable())
             }
 
-            pub(crate) fn is_writable(&self) -> bool {
+            /// Whether the socket is ready to be written. Always `false` for io_uring.
+            pub fn is_writable(&self) -> bool {
                 matches!(self, Self::Epoll(packet) if packet.is_writable())
             }
         }
@@ -101,7 +107,8 @@ mod linux {
     }
 
     impl CompletionService {
-        pub(crate) fn new_factory() -> fn(u32) -> io::Result<Self> {
+        /// Returns a new factory that creates io_uring instances, or epoll instances if io_uring is not available.
+        pub fn new_factory() -> fn(u32) -> io::Result<Self> {
             |entries| match uring::CompletionService::new_factory()(entries) {
                 Err(error) if matches!(error.kind(), io::ErrorKind::Unsupported | io::ErrorKind::PermissionDenied) => {
                     epoll::CompletionService::new_factory()(entries)
@@ -110,7 +117,13 @@ mod linux {
             }
         }
 
-        pub(crate) fn is_io_uring(&self) -> bool {
+        /// Returns a new factory that creates epoll instances, even if io_uring is available.
+        pub fn epoll_factory() -> fn(u32) -> io::Result<Self> {
+            epoll::CompletionService::new_factory()
+        }
+
+        /// Whether this completion service uses io_uring.
+        pub fn is_io_uring(&self) -> bool {
             matches!(self, Self::IoUring(_))
         }
 
@@ -135,6 +148,8 @@ mod linux {
         pub(in crate::handle) buffer_ring: Option<BufferRing>,
         pub(in crate::handle) writes: FxHashMap<usize, (Vec<BytesMut>, Vec<IoSlice<'static>>)>,
         pub(in crate::handle) addresses: FxHashMap<usize, Box<SockAddr>>,
+        pub(in crate::handle) requests: FxHashMap<u64, Box<dyn Request>>,
+        slot: u16,
     }
 
     impl EventArray {
@@ -152,12 +167,26 @@ mod linux {
                 buffer_ring,
                 writes: FxHashMap::default(),
                 addresses: FxHashMap::default(),
+                requests: FxHashMap::default(),
+                slot: 0,
             }
+        }
+
+        pub(in crate::handle) fn next_slot(&mut self) -> u16 {
+            self.slot = self.slot.wrapping_add(1).max(1);
+            self.slot
         }
     }
 
     impl ScheduledExecutorService {
-        pub(crate) fn run_worker(&mut self) -> io::Result<()> {
+        /// The number of operations that have been submitted and have not completed yet.
+        pub fn pending(&self) -> usize {
+            self.array.response_total
+        }
+
+        /// Waits for operations to complete, at most until the next scheduled task is due, and passes them to their
+        /// handlers.
+        pub fn run_worker(&mut self) -> io::Result<()> {
             let port = Arc::clone(&self.port);
             match &*port {
                 CompletionService::Epoll(port) => epoll::run_worker(self, port),
@@ -165,14 +194,22 @@ mod linux {
             }
         }
 
-        pub(crate) fn submit<S: AsFd>(&mut self, socket: &S, flags: u32) -> io::Result<()> {
+        /// Sets the events of `socket` that the handler that is being handled waits for with epoll.
+        ///
+        /// With `flags` of `0` the socket is unregistered.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`Unsupported`](io::ErrorKind::Unsupported) if this executor uses io_uring.
+        pub fn submit<S: AsFd>(&mut self, socket: &S, flags: u32) -> io::Result<()> {
             match &*self.port {
                 CompletionService::Epoll(port) => epoll::submit(port, self.socket_id, socket, flags),
                 CompletionService::IoUring(_) => Err(io::ErrorKind::Unsupported.into()),
             }
         }
 
-        pub(crate) fn close(&mut self) {
+        /// Closes all handlers and waits for the operations that are still in flight.
+        pub fn close(&mut self) {
             self.close_sockets();
             if let CompletionService::IoUring(port) = &*Arc::clone(&self.port) {
                 uring::close(self, port);

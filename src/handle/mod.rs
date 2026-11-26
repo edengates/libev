@@ -19,11 +19,15 @@
 #[cfg_attr(windows, path = "../sys/win/mod.rs")]
 mod platform;
 pub(crate) use platform::*;
-pub use platform::CompletionService;
+pub use platform::{BorrowedSocket, Completion, CompletionService, EventArray, event};
+#[cfg(windows)]
+pub use platform::set_power_suppressed;
 
 #[cfg(any(windows, target_os = "linux"))]
 mod socket_channel_mixin;
 #[cfg(any(windows, target_os = "linux"))]
 pub(crate) use socket_channel_mixin::{SocketChannelMixin, SocketChannelState};
-mod channel;
-pub(crate) use channel::Channel;
+mod socket_handler;
+pub use socket_handler::SocketHandler;
+mod request;
+pub use request::Request;

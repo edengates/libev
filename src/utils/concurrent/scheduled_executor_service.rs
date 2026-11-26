@@ -15,10 +15,9 @@
  */
 
 use crate::entities::channel::concrete::ThreadChannel;
-use crate::entities::channel::middleman::MessageChannel;
-use crate::entities::channel::mixin::middleman::MessageChannelMixin;
+use crate::entities::channel::mixin::ChannelMixin;
 use crate::entities::snowflake::{EPOCH, TIMESTAMP_OFFSET};
-use crate::handle::Channel;
+use crate::handle::SocketHandler;
 use crate::handle::{EventArray, CompletionService};
 use crate::utils::concurrent::{Dispatcher, ThreadWaker};
 use rustc_hash::FxHashMap;
@@ -76,8 +75,8 @@ impl Worker {
 /// Runs the sockets of one [`ExecutorCompletionService`](crate::utils::concurrent::ExecutorCompletionService) on its thread.
 pub struct ScheduledExecutorService {
     pub(crate) port: Arc<CompletionService>,
-    pub(crate) sockets: FxHashMap<usize, Box<dyn Channel>>,
-    channels: FxHashMap<u64, (usize, Rc<MessageChannelMixin>)>,
+    pub(crate) sockets: FxHashMap<usize, Box<dyn SocketHandler>>,
+    channels: FxHashMap<u64, (usize, Rc<dyn ChannelMixin>)>,
     sequence: usize,
     thread_waker: Option<Arc<ThreadWaker>>,
     pub(crate) socket_id: usize,
@@ -89,7 +88,10 @@ pub struct ScheduledExecutorService {
 }
 
 impl ScheduledExecutorService {
-    pub(crate) fn new(port: Arc<CompletionService>, dispatcher: Dispatcher, capacity: usize) -> Self {
+    /// Creates the executor of the current thread.
+    ///
+    /// The `capacity` is the maximum number of events handled per poll.
+    pub fn new(port: Arc<CompletionService>, dispatcher: Dispatcher, capacity: usize) -> Self {
         WORKER.set(Some(Worker {
             dispatcher: Arc::new(dispatcher),
             id: WORKERS.fetch_add(1, Ordering::Relaxed) & 0x3FF,
@@ -123,23 +125,60 @@ impl ScheduledExecutorService {
         })
     }
 
-    pub(crate) fn is_current(port: &Arc<CompletionService>) -> bool {
+    /// The buffer that the handlers of this executor share to read from their sockets.
+    pub fn read_buffer(&mut self) -> &mut BytesMut {
+        &mut self.read_buffer
+    }
+
+    /// The number of handlers that are registered to this executor.
+    pub fn sockets_total(&self) -> usize {
+        self.sockets.len()
+    }
+
+    /// Creates the id of a new channel on the current thread.
+    ///
+    /// The ids grow with time and are unique across the executors of the process.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no [`ScheduledExecutorService`] was created on the current thread.
+    pub fn next_id() -> u64 {
+        WORKER.with_borrow_mut(|worker| worker.as_mut().unwrap().snowflake())
+    }
+
+    /// The [`Dispatcher`] that sends tasks to the executor of the current thread.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no [`ScheduledExecutorService`] was created on the current thread.
+    pub fn dispatcher() -> Arc<Dispatcher> {
+        WORKER.with_borrow(|worker| Arc::clone(&worker.as_ref().unwrap().dispatcher))
+    }
+
+    /// Whether the current thread runs the executor that uses `port`.
+    pub fn is_current(port: &Arc<CompletionService>) -> bool {
         WORKER.with_borrow(|worker| worker.as_ref().is_some_and(|worker| Arc::ptr_eq(worker.dispatcher.port(), port)))
     }
 
-    pub(crate) fn add_channel(&mut self, id: u64, channel: &Rc<MessageChannelMixin>) {
-        self.channels.insert(id, (self.socket_id, Rc::clone(channel)));
+    /// Makes the channel reachable by its `id` for [`execute_channel`](Self::execute_channel), on behalf of the
+    /// handler that is being handled.
+    pub fn add_channel(&mut self, id: u64, channel: Rc<dyn ChannelMixin>) {
+        self.channels.insert(id, (self.socket_id, channel));
     }
 
-    pub(crate) fn remove_channel(&mut self, id: u64) {
+    /// Makes the channel with the `id` unreachable again.
+    pub fn remove_channel(&mut self, id: u64) {
         self.channels.remove(&id);
     }
 
-    pub(crate) fn execute_channel<N, P, F>(&mut self, id: u64, position: usize, action: F)
+    /// Runs the `action` on the channel of type `C` at `position` in the channel with the `id`, then wakes the channel
+    /// and lets its handler execute.
+    ///
+    /// Nothing happens if the channel is not reachable or is not of type `C`.
+    pub fn execute_channel<C, F>(&mut self, id: u64, position: usize, action: F)
     where
-        N: 'static,
-        P: 'static,
-        F: FnOnce(&mut MessageChannel<N, P>),
+        C: 'static,
+        F: FnOnce(&mut C),
     {
         let Some((key, channel)) = self.channels.get(&id).map(|(key, channel)| (*key, Rc::clone(channel))) else {
             return;
@@ -174,7 +213,7 @@ impl ScheduledExecutorService {
 
     pub(crate) fn handle_event<F>(&mut self, key: usize, call: F)
     where
-        F: FnOnce(&mut dyn Channel, &mut ScheduledExecutorService) -> bool,
+        F: FnOnce(&mut dyn SocketHandler,&mut ScheduledExecutorService) -> bool,
     {
         if let Some(mut handle) = self.sockets.remove(&key) {
             let socket_id = mem::replace(&mut self.socket_id, key);
@@ -196,6 +235,9 @@ impl ScheduledExecutorService {
         }
     }
 
+    /// Runs the `task` on the thread of this executor after the `delay`.
+    ///
+    /// Returns the time the task is due and its id.
     pub fn schedule<F>(&mut self, delay: Duration, task: F) -> (Instant, usize)
     where
         F: FnOnce(&mut ScheduledExecutorService) + Send + 'static,
@@ -203,7 +245,8 @@ impl ScheduledExecutorService {
         self.queue.schedule(delay, Box::new(task))
     }
 
-    pub(crate) fn execute(&mut self) {
+    /// Runs the scheduled tasks that are due and polls the queued futures once.
+    pub fn execute(&mut self) {
         let now = Instant::now();
         while let Some(task) = self.queue.next(now) {
             if panic::catch_unwind(AssertUnwindSafe(|| task(self))).is_err() {
@@ -219,10 +262,12 @@ impl ScheduledExecutorService {
         }
     }
 
+    /// Polls the `task` on the thread of this executor, now and every time it is woken, until it completes.
+    ///
     /// # Panics
     ///
     /// Panics if the first poll of `task` panics.
-    pub(crate) fn enqueue(&mut self, task: LocalBoxFuture<'static, ()>) {
+    pub fn enqueue(&mut self, task: LocalBoxFuture<'static, ()>) {
         let port = &self.port;
         let thread_waker = &mut self.thread_waker;
         self.queue.enqueue(task, self.socket_id, |response_number, sender| {
@@ -236,10 +281,19 @@ impl ScheduledExecutorService {
         });
     }
 
+    /// Registers the socket of the `handle` and calls [`on_registered`](SocketHandler::on_registered).
+    ///
+    /// The handler stays registered if [`on_registered`](SocketHandler::on_registered) returns `Ok(true)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokenPipe`](io::ErrorKind::BrokenPipe) if this executor has been shut down, or the error of the
+    /// registration.
+    ///
     /// # Panics
     ///
-    /// Panics if [`Channel::on_registered`] panics.
-    pub fn register(&mut self, mut handle: Box<dyn Channel>) -> io::Result<()> {
+    /// Panics if [`SocketHandler::on_registered`] panics.
+    pub fn register(&mut self, mut handle: Box<dyn SocketHandler>) -> io::Result<()> {
         if self.is_stopped {
             debug!("Rejected task after shutdown");
             return Err(io::ErrorKind::BrokenPipe.into());
@@ -259,11 +313,14 @@ impl ScheduledExecutorService {
         data.map(|_| ())
     }
 
+    /// Calls [`on_registered`](SocketHandler::on_registered) of the handler that is being handled again after the
+    /// `delay`.
     pub fn retry(&mut self, delay: Duration) {
         let key = self.socket_id;
         self.schedule(delay, move |manager| manager.reconnect(key));
     }
 
+    /// Calls [`check_expired`](SocketHandler::check_expired) of the handler that is being handled after the `delay`.
     pub fn setup_keep_alive(&mut self, delay: Duration) {
         let key = self.socket_id;
         self.queue.setup_keep_alive(
@@ -279,24 +336,26 @@ impl ScheduledExecutorService {
         self.queue.stop_keep_alive(key);
     }
 
-    pub(crate) fn close_after(&mut self, delay: Duration) {
+    /// Closes the handler that is being handled after the `delay`.
+    pub fn close_after(&mut self, delay: Duration) {
         let key = self.socket_id;
         self.schedule(delay, move |manager| manager.handle_event(key, |_, _| false));
     }
 
-    pub(crate) fn deadline(&mut self, delay: Duration) {
+    /// Cancels the queued futures of the handler that is being handled after the `delay`.
+    pub fn deadline(&mut self, delay: Duration) {
         let key = self.socket_id;
         self.schedule(delay, move |manager| manager.queue.cancel(key));
     }
 
     pub(crate) fn close_sockets(&mut self) {
-        let sockets: Vec<(usize, Box<dyn Channel>)> = self.sockets.drain().collect();
+        let sockets: Vec<(usize, Box<dyn SocketHandler>)> = self.sockets.drain().collect();
         for (key, handle) in sockets {
             self.close_resource(key, handle);
         }
     }
 
-    fn close_resource(&mut self, key: usize, mut handle: Box<dyn Channel>) {
+    fn close_resource(&mut self, key: usize, mut handle: Box<dyn SocketHandler>) {
         let socket_id = mem::replace(&mut self.socket_id, key);
         panic::catch_unwind(AssertUnwindSafe(|| {
             handle.close(self);
@@ -315,7 +374,7 @@ impl ScheduledExecutorService {
 mod tests {
     use super::*;
     use crate::entities::ISnowflake;
-    use crate::handle::event::Event;
+    use crate::handle::Completion;
     use std::net::TcpListener;
     #[cfg(unix)]
     use std::os::fd::{AsFd, BorrowedFd};
@@ -327,7 +386,7 @@ mod tests {
         active: bool,
     }
 
-    impl Channel for HeartbeatChannel {
+    impl SocketHandler for HeartbeatChannel {
         #[cfg(unix)]
         fn socket(&self) -> BorrowedFd<'_> {
             self.listener.as_fd()
@@ -344,7 +403,7 @@ mod tests {
             Ok(self.active)
         }
 
-        fn handle(&mut self, _manager: &mut ScheduledExecutorService, _data: io::Result<Event>) -> io::Result<bool> {
+        fn handle(&mut self, _manager: &mut ScheduledExecutorService, _data: Completion) -> io::Result<bool> {
             Ok(true)
         }
     }

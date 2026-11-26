@@ -21,6 +21,7 @@
 //! Each [`SocketManager`] instance manages the sockets and connections to receive [events].
 pub mod entities;
 pub mod events;
+pub mod ext;
 pub mod handle;
 pub mod hooks;
 pub mod requests;
