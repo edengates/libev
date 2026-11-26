@@ -16,7 +16,7 @@
 
 use crate::SocketManager;
 use crate::entities::channel::concrete::ThreadChannel;
-use crate::entities::channel::mixin::middleman::MessageChannelMixin;
+use crate::entities::channel::mixin::middleman::BufferedChannelMixin;
 use crate::requests::Sink;
 use crate::events::Event;
 use crate::utils::Buffer;
@@ -61,7 +61,7 @@ pub trait EventManagerProxy {
 
     fn thread_channel(&self) -> Box<dyn Any + Send + Sync>;
 
-    fn handle(self: Rc<Self>, channel: Rc<MessageChannelMixin>) -> LocalBoxFuture<'static, ()>;
+    fn handle(self: Rc<Self>, channel: Rc<BufferedChannelMixin>) -> LocalBoxFuture<'static, ()>;
 }
 
 impl<P: EventManager> EventManagerProxy for RefCell<P> {
@@ -76,7 +76,7 @@ impl<P: EventManager> EventManagerProxy for RefCell<P> {
     }
 
     #[allow(clippy::await_holding_refcell_ref)]
-    fn handle(self: Rc<Self>, channel: Rc<MessageChannelMixin>) -> LocalBoxFuture<'static, ()> {
+    fn handle(self: Rc<Self>, channel: Rc<BufferedChannelMixin>) -> LocalBoxFuture<'static, ()> {
         Box::pin(async move {
             let mut data = Ok(true);
             while let Ok(true) = data {

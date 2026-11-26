@@ -32,7 +32,7 @@ impl Event for Box<dyn GenericEvent> {
 mod tests {
     use super::*;
     use crate::events::channel::ChannelReadyEvent;
-    use crate::events::message::MessageReceivedEvent;
+    use crate::events::buffer::BufferReceivedEvent;
     use std::any::Any;
 
     struct CustomEvent;
@@ -43,9 +43,9 @@ mod tests {
     fn identifier() {
         assert_eq!(ChannelReadyEvent.identifier(), ChannelReadyEvent::IDENTIFIER);
 
-        let event: Box<dyn Event> = Box::new(MessageReceivedEvent::new(7u32));
-        assert_eq!(event.identifier(), MessageReceivedEvent::IDENTIFIER);
-        assert_eq!((event as Box<dyn Any>).downcast::<MessageReceivedEvent<u32>>().unwrap().message(), 7);
+        let event: Box<dyn Event> = Box::new(BufferReceivedEvent::new(7u32));
+        assert_eq!(event.identifier(), BufferReceivedEvent::IDENTIFIER);
+        assert_eq!((event as Box<dyn Any>).downcast::<BufferReceivedEvent<u32>>().unwrap().buffer(), 7);
 
         let event: Box<dyn Event> = Box::new(Box::new(CustomEvent) as Box<dyn GenericEvent>);
         assert_eq!(event.identifier(), 0);

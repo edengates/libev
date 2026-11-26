@@ -15,14 +15,14 @@
  */
 
 use crate::SocketManager;
-use crate::entities::channel::middleman::MessageChannel;
+use crate::entities::channel::middleman::BufferedChannel;
 use crate::entities::channel::concrete::ThreadChannel;
 use crate::hooks::ListenerAdapter;
 use crate::requests::Sink;
 use crate::utils::{EventManager, EventQueue};
 use crate::events::channel::update::ChannelUpdateSlowmodeEvent;
 use crate::events::channel::{ChannelDisconnectEvent, ChannelReadyEvent, ChannelTimeoutEvent};
-use crate::events::message::MessageReceivedEvent;
+use crate::events::buffer::BufferReceivedEvent;
 use crate::events::{Event, GenericEvent};
 use crate::utils::Buffer;
 use std::any::Any;
@@ -34,7 +34,7 @@ use std::rc::Rc;
 pub struct InterfacedEventManager<P: EventManager, L, O> {
     lower: P,
     listener: L,
-    channel: MessageChannel<O, P::Output>,
+    channel: BufferedChannel<O, P::Output>,
     events: EventQueue,
     outbound: Rc<RefCell<VecDeque<Command<O>>>>,
 }
@@ -48,7 +48,7 @@ impl<P: EventManager, L, O: Any + Send> InterfacedEventManager<P, L, O> {
         thread_channel: &ThreadChannel,
     ) -> Self {
         let events = EventQueue::default();
-        let channel = MessageChannel::new(
+        let channel = BufferedChannel::new(
             socket_manager.clone(),
             Rc::clone(buffer),
             thread_channel.at_position(lower.position() + 1),
@@ -74,11 +74,11 @@ where
     async fn handle_event(&mut self, event: Box<dyn Event>) -> io::Result<()> {
         match event.identifier() {
             ChannelReadyEvent::IDENTIFIER => self.listener.on_ready(&mut self.channel).await,
-            MessageReceivedEvent::IDENTIFIER => {
+            BufferReceivedEvent::IDENTIFIER => {
                 let event = (event as Box<dyn Any>)
-                    .downcast::<MessageReceivedEvent<P::Output>>()
+                    .downcast::<BufferReceivedEvent<P::Output>>()
                     .map_err(|_| io::ErrorKind::InvalidInput)?;
-                self.listener.on_message_received(&mut self.channel, event.message()).await
+                self.listener.on_buffer_received(&mut self.channel, event.buffer()).await
             }
             ChannelDisconnectEvent::IDENTIFIER => self.listener.on_channel_disconnect(&mut self.channel).await,
             ChannelUpdateSlowmodeEvent::IDENTIFIER => self.listener.on_channel_update_slowmode(&mut self.channel).await,

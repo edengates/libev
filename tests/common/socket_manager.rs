@@ -18,7 +18,7 @@ use bytes::BytesMut;
 use libev::DefaultSocketManagerBuilder;
 use libev::entities::ISnowflake;
 use libev::entities::channel::concrete::ThreadChannel;
-use libev::entities::channel::middleman::MessageChannel;
+use libev::entities::channel::middleman::BufferedChannel;
 use libev::hooks::ListenerAdapter;
 use libev::requests::sockactions::SocketAction;
 use libev::utils::concurrent::ScheduledThreadPoolExecutor;
@@ -33,11 +33,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 #[derive(Clone)]
-struct MessageForwardHandler;
+struct BufferForwardHandler;
 
-impl ListenerAdapter for MessageForwardHandler {
-    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
-        channel.send_message(message).await
+impl ListenerAdapter for BufferForwardHandler {
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
+        channel.send_buffer(message).await
     }
 }
 
@@ -46,11 +46,11 @@ struct TestHandler {
 }
 
 impl ListenerAdapter for TestHandler {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
-        channel.send_message(BytesMut::from(&b"ping"[..])).await
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
+        channel.send_buffer(BytesMut::from(&b"ping"[..])).await
     }
 
-    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
         self.callback.send(message.to_vec()).ok();
         channel.close();
         Ok(())
@@ -61,7 +61,7 @@ impl ListenerAdapter for TestHandler {
 struct SessionInvalidateAdapter;
 
 impl ListenerAdapter for SessionInvalidateAdapter {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         channel.close();
         Ok(())
     }
@@ -72,7 +72,7 @@ struct ShardManagerAdapter {
 }
 
 impl ListenerAdapter for ShardManagerAdapter {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         self.callback.send(channel.socket_manager().worker_pool().shards_total()).ok();
         channel.close();
         Ok(())
@@ -85,13 +85,13 @@ struct ChannelDisconnectAdapter {
 }
 
 impl ListenerAdapter for ChannelDisconnectAdapter {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         self.callback.send(true).ok();
         channel.on_ready();
         Ok(())
     }
 
-    async fn on_channel_disconnect(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_channel_disconnect(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         self.callback.send(false).ok();
         channel.on_channel_disconnect();
         Ok(())
@@ -104,22 +104,22 @@ struct ChannelUpdateSlowmodeAdapter {
 }
 
 impl ListenerAdapter for ChannelUpdateSlowmodeAdapter {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
-        channel.send_message(BytesMut::zeroed(1024 * 1024)).await
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
+        channel.send_buffer(BytesMut::zeroed(1024 * 1024)).await
     }
 
-    async fn on_channel_update_slowmode(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_channel_update_slowmode(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         self.callback.send(channel.is_locked()).ok();
         Ok(())
     }
 }
 
 #[derive(Clone)]
-struct MessageReceivedAdapter;
+struct BufferReceivedAdapter;
 
-impl ListenerAdapter for MessageReceivedAdapter {
-    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
-        channel.send_message(message).await?;
+impl ListenerAdapter for BufferReceivedAdapter {
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
+        channel.send_buffer(message).await?;
         channel.close();
         Ok(())
     }
@@ -132,13 +132,13 @@ struct ThreadListSyncHandler {
 }
 
 impl ThreadListSyncHandler {
-    async fn chunk(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn chunk(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         while !channel.is_locked() && self.sent < 16 * 1024 * 1024 {
             let chunk: BytesMut = (self.sent..self.sent + 64 * 1024)
                 .map(|index| (index % 251) as u8)
                 .collect();
             self.sent += chunk.len();
-            channel.send_message(chunk).await?;
+            channel.send_buffer(chunk).await?;
         }
         if self.sent >= 16 * 1024 * 1024 {
             channel.close();
@@ -148,13 +148,13 @@ impl ThreadListSyncHandler {
 }
 
 impl ListenerAdapter for ThreadListSyncHandler {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         self.chunk(channel).await?;
         channel.on_ready();
         Ok(())
     }
 
-    async fn on_channel_update_slowmode(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_channel_update_slowmode(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         self.callback.send(channel.is_locked()).ok();
         if !channel.is_locked() {
             self.chunk(channel).await?;
@@ -170,22 +170,22 @@ struct SelfDeafenAdapter {
 }
 
 impl ListenerAdapter for SelfDeafenAdapter {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         channel.set_self_deafened(true);
         if self.undeafen {
-            channel.send_message(BytesMut::zeroed(16)).await?;
+            channel.send_buffer(BytesMut::zeroed(16)).await?;
         }
         Ok(())
     }
 
-    async fn on_channel_update_slowmode(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_channel_update_slowmode(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         if !channel.is_locked() {
             channel.set_self_deafened(false);
         }
         Ok(())
     }
 
-    async fn on_message_received(&mut self, _channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+    async fn on_buffer_received(&mut self, _channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
         self.callback.send(message.to_vec()).ok();
         Ok(())
     }
@@ -197,7 +197,7 @@ struct ChannelTimeoutAdapter {
 }
 
 impl ListenerAdapter for ChannelTimeoutAdapter {
-    async fn on_channel_timeout(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_channel_timeout(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         self.callback.send(()).ok();
         channel.close();
         Ok(())
@@ -208,13 +208,13 @@ impl ListenerAdapter for ChannelTimeoutAdapter {
 struct StringHandler;
 
 impl ListenerAdapter<BytesMut, String> for StringHandler {
-    async fn on_message_received(&mut self, channel: &mut MessageChannel<String>, message: BytesMut) -> io::Result<()> {
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel<String>, message: BytesMut) -> io::Result<()> {
         let text = String::from_utf8(message.to_vec()).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
-        channel.on_message_received(text);
+        channel.on_buffer_received(text);
         Ok(())
     }
 
-    async fn write(&mut self, channel: &mut MessageChannel<String>, message: String) -> io::Result<()> {
+    async fn write(&mut self, channel: &mut BufferedChannel<String>, message: String) -> io::Result<()> {
         channel.write(BytesMut::from(message.as_bytes()))
     }
 }
@@ -223,19 +223,19 @@ impl ListenerAdapter<BytesMut, String> for StringHandler {
 struct TextHandler;
 
 impl ListenerAdapter<String, String> for TextHandler {
-    async fn on_message_received(&mut self, channel: &mut MessageChannel<String, String>, message: String) -> io::Result<()> {
-        channel.send_message(message.to_uppercase()).await
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel<String, String>, message: String) -> io::Result<()> {
+        channel.send_buffer(message.to_uppercase()).await
     }
 }
 
 #[derive(Clone)]
-struct MessageUpdateHandler;
+struct BufferUpdateHandler;
 
-impl ListenerAdapter for MessageUpdateHandler {
-    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+impl ListenerAdapter for BufferUpdateHandler {
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
         let delay = channel.socket_manager().worker_pool().provide().delay(Duration::from_millis(50))?;
         delay.await;
-        channel.send_message(message).await
+        channel.send_buffer(message).await
     }
 }
 
@@ -246,15 +246,15 @@ struct SessionDisconnectAdapter {
 }
 
 impl ListenerAdapter for SessionDisconnectAdapter {
-    async fn on_message_received(&mut self, channel: &mut MessageChannel, _message: BytesMut) -> io::Result<()> {
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel, _message: BytesMut) -> io::Result<()> {
         self.callback.send("received").ok();
         channel.socket_manager().worker_pool().provide().delay(self.delay)?.await;
-        let closed = channel.send_message(BytesMut::from(&b"late"[..])).await.is_err();
+        let closed = channel.send_buffer(BytesMut::from(&b"late"[..])).await.is_err();
         self.callback.send(if closed { "closed" } else { "open" }).ok();
         Ok(())
     }
 
-    async fn on_channel_disconnect(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_channel_disconnect(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         self.callback.send("disconnect").ok();
         channel.on_channel_disconnect();
         Ok(())
@@ -267,7 +267,7 @@ struct ErrorResponseAdapter {
 }
 
 impl ListenerAdapter for ErrorResponseAdapter {
-    async fn on_message_received(&mut self, channel: &mut MessageChannel, _message: BytesMut) -> io::Result<()> {
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel, _message: BytesMut) -> io::Result<()> {
         channel.socket_manager().worker_pool().provide().delay(Duration::from_millis(50))?.await;
         if self.panic {
             panic!();
@@ -277,10 +277,10 @@ impl ListenerAdapter for ErrorResponseAdapter {
 }
 
 #[derive(Clone)]
-struct MessageCreateHandler;
+struct BufferCreateHandler;
 
-impl ListenerAdapter for MessageCreateHandler {
-    async fn write(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+impl ListenerAdapter for BufferCreateHandler {
+    async fn write(&mut self, channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
         channel.socket_manager().worker_pool().provide().delay(Duration::from_millis(50))?.await;
         channel.write(message)
     }
@@ -293,13 +293,13 @@ struct CallbackContext {
 }
 
 impl ListenerAdapter for CallbackContext {
-    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
         if self.close {
             channel.close();
         }
         let success = self.callback.clone();
         let failure = self.callback.clone();
-        channel.send_message(message).queue(
+        channel.send_buffer(message).queue(
             move |_| {
                 success.send(true).ok();
             },
@@ -311,30 +311,30 @@ impl ListenerAdapter for CallbackContext {
 }
 
 #[derive(Clone)]
-struct MessageBulkAdapter;
+struct BufferBulkAdapter;
 
-impl ListenerAdapter for MessageBulkAdapter {
-    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
-        channel.send_message(message.clone()).queue(|_| (), |_| ())?;
-        channel.send_message(message).queue(|_| (), |_| ())
+impl ListenerAdapter for BufferBulkAdapter {
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
+        channel.send_buffer(message.clone()).queue(|_| (), |_| ())?;
+        channel.send_buffer(message).queue(|_| (), |_| ())
     }
 }
 
-struct MessageHistoryAdapter {
+struct BufferHistoryAdapter {
     payload: Arc<Vec<u8>>,
     received: Vec<u8>,
     callback: Sender<Vec<u8>>,
 }
 
-impl ListenerAdapter for MessageHistoryAdapter {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+impl ListenerAdapter for BufferHistoryAdapter {
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         for chunk in chunks(&self.payload, 64 * 1024) {
-            channel.send_message(chunk).queue(|_| (), |_| ())?;
+            channel.send_buffer(chunk).queue(|_| (), |_| ())?;
         }
         Ok(())
     }
 
-    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
         self.received.extend_from_slice(&message);
         if self.received.len() >= self.payload.len() {
             self.callback.send(mem::take(&mut self.received)).ok();
@@ -345,14 +345,14 @@ impl ListenerAdapter for MessageHistoryAdapter {
 }
 
 #[derive(Clone)]
-struct MessageForwardSlowmodeAdapter;
+struct BufferForwardSlowmodeAdapter;
 
-impl ListenerAdapter for MessageForwardSlowmodeAdapter {
-    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
-        channel.send_message(message).queue(|_| (), |_| ())
+impl ListenerAdapter for BufferForwardSlowmodeAdapter {
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
+        channel.send_buffer(message).queue(|_| (), |_| ())
     }
 
-    async fn on_channel_update_slowmode(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_channel_update_slowmode(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         channel.set_self_deafened(channel.is_locked());
         Ok(())
     }
@@ -362,9 +362,9 @@ impl ListenerAdapter for MessageForwardSlowmodeAdapter {
 struct SelfDeafenUpdateAdapter;
 
 impl ListenerAdapter for SelfDeafenUpdateAdapter {
-    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
         channel.set_self_deafened(true);
-        channel.send_message(message).await?;
+        channel.send_buffer(message).await?;
         channel.socket_manager().worker_pool().provide().delay(Duration::from_millis(50))?.await;
         channel.set_self_deafened(false);
         Ok(())
@@ -377,26 +377,26 @@ struct ChannelDeleteAdapter {
 }
 
 impl ListenerAdapter for ChannelDeleteAdapter {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
-        channel.send_message(BytesMut::from(&payload(self.length, 0)[..])).queue(|_| (), |_| ())?;
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
+        channel.send_buffer(BytesMut::from(&payload(self.length, 0)[..])).queue(|_| (), |_| ())?;
         channel.close();
         Ok(())
     }
 }
 
 #[derive(Clone)]
-struct MessageReceiveAdapter {
+struct BufferReceiveAdapter {
     received: Vec<u8>,
     callback: Sender<Vec<u8>>,
 }
 
-impl ListenerAdapter for MessageReceiveAdapter {
-    async fn on_message_received(&mut self, _channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+impl ListenerAdapter for BufferReceiveAdapter {
+    async fn on_buffer_received(&mut self, _channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
         self.received.extend_from_slice(&message);
         Ok(())
     }
 
-    async fn on_channel_disconnect(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_channel_disconnect(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         self.callback.send(mem::take(&mut self.received)).ok();
         channel.on_channel_disconnect();
         Ok(())
@@ -410,7 +410,7 @@ struct SessionResumeAdapter {
 }
 
 impl ListenerAdapter for SessionResumeAdapter {
-    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
         self.received.extend_from_slice(&message);
         if !self.paused && self.received.len() >= 128 * 1024 {
             self.paused = true;
@@ -421,7 +421,7 @@ impl ListenerAdapter for SessionResumeAdapter {
         Ok(())
     }
 
-    async fn on_channel_disconnect(&mut self, _channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_channel_disconnect(&mut self, _channel: &mut BufferedChannel) -> io::Result<()> {
         self.callback.send(mem::take(&mut self.received)).ok();
         Ok(())
     }
@@ -431,7 +431,7 @@ impl ListenerAdapter for SessionResumeAdapter {
 struct ChannelCloseAdapter;
 
 impl ListenerAdapter for ChannelCloseAdapter {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         channel.close();
         channel.close();
         Ok(())
@@ -439,22 +439,22 @@ impl ListenerAdapter for ChannelCloseAdapter {
 }
 
 #[derive(Clone)]
-struct MessageBulkSendAdapter;
+struct BufferBulkSendAdapter;
 
-impl ListenerAdapter for MessageBulkSendAdapter {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
-        channel.send_message(BytesMut::zeroed(4 * 1024 * 1024)).queue(|_| (), |_| ())?;
+impl ListenerAdapter for BufferBulkSendAdapter {
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
+        channel.send_buffer(BytesMut::zeroed(4 * 1024 * 1024)).queue(|_| (), |_| ())?;
         channel.close();
         Ok(())
     }
 }
 
-struct MessageBulkWriteAdapter {
+struct BufferBulkWriteAdapter {
     payload: Vec<u8>,
 }
 
-impl ListenerAdapter for MessageBulkWriteAdapter {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+impl ListenerAdapter for BufferBulkWriteAdapter {
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         for chunk in chunks(&self.payload, 8 * 1024) {
             channel.write(chunk)?;
         }
@@ -463,19 +463,19 @@ impl ListenerAdapter for MessageBulkWriteAdapter {
     }
 }
 
-struct MessagePayloadAdapter {
+struct BufferPayloadAdapter {
     received: Vec<u8>,
     callback: Sender<Vec<u8>>,
 }
 
-impl ListenerAdapter for MessagePayloadAdapter {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
-        channel.send_message(BytesMut::from(&b"payload"[..])).queue(|_| (), |_| ())?;
+impl ListenerAdapter for BufferPayloadAdapter {
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
+        channel.send_buffer(BytesMut::from(&b"payload"[..])).queue(|_| (), |_| ())?;
         channel.on_ready();
         Ok(())
     }
 
-    async fn on_message_received(&mut self, channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
         self.received.extend_from_slice(&message);
         if self.received.len() >= b"payload".len() {
             self.callback.send(mem::take(&mut self.received)).ok();
@@ -494,7 +494,7 @@ struct GuildReadyAdapter {
 
 #[cfg(unix)]
 impl ListenerAdapter for GuildReadyAdapter {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         self.callback.send(self.id).ok();
         channel.close();
         Ok(())
@@ -507,7 +507,7 @@ struct ThreadChannelAdapter {
 }
 
 impl ListenerAdapter for ThreadChannelAdapter {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         self.callback.send(channel.thread_channel().clone()).ok();
         Ok(())
     }
@@ -519,7 +519,7 @@ struct ThreadTextAdapter {
 }
 
 impl ListenerAdapter<String, String> for ThreadTextAdapter {
-    async fn on_ready(&mut self, channel: &mut MessageChannel<String, String>) -> io::Result<()> {
+    async fn on_ready(&mut self, channel: &mut BufferedChannel<String, String>) -> io::Result<()> {
         self.callback.send(channel.thread_channel().clone()).ok();
         Ok(())
     }
@@ -531,9 +531,9 @@ struct QueueAdapter {
 }
 
 impl ListenerAdapter for QueueAdapter {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
         let (success, failure) = (self.callback.clone(), self.callback.clone());
-        channel.thread_channel().send_message(BytesMut::from(&b"ping"[..])).queue(
+        channel.thread_channel().send_buffer(BytesMut::from(&b"ping"[..])).queue(
             move |_| {
                 success.send(Ok(())).ok();
             },
@@ -551,8 +551,8 @@ struct DeadLockAdapter {
 }
 
 impl ListenerAdapter for DeadLockAdapter {
-    async fn on_ready(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
-        let data = channel.thread_channel().send_message(BytesMut::from(&b"ping"[..])).complete();
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
+        let data = channel.thread_channel().send_buffer(BytesMut::from(&b"ping"[..])).complete();
         self.callback.send(data).ok();
         Ok(())
     }
@@ -584,7 +584,7 @@ fn gathering(length: usize, connections: usize) {
     let manager = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
         .set_worker_pool(shard_manager(1))
-        .add_event_listener_provider(move || MessageBulkWriteAdapter {
+        .add_event_listener_provider(move || BufferBulkWriteAdapter {
             payload: payload(length, seed.fetch_add(1, Ordering::Relaxed)),
         })
         .build()
@@ -611,7 +611,7 @@ fn gathering(length: usize, connections: usize) {
 fn echo() {
     let server = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
-        .add_event_listener(MessageForwardHandler)
+        .add_event_listener(BufferForwardHandler)
         .build()
         .unwrap();
     let address = server.bind("127.0.0.1:0").unwrap();
@@ -640,7 +640,7 @@ fn echo() {
 fn flush() {
     let server = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
-        .add_event_listener(MessageForwardHandler)
+        .add_event_listener(BufferForwardHandler)
         .build()
         .unwrap();
     let address = server.bind("127.0.0.1:0").unwrap();
@@ -658,7 +658,7 @@ fn flush() {
 fn socket_manager() {
     let server = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
-        .add_event_listener(MessageForwardHandler)
+        .add_event_listener(BufferForwardHandler)
         .build()
         .unwrap();
     let address = server.bind("127.0.0.1:0").unwrap();
@@ -682,7 +682,7 @@ fn shutdown_now() {
     let server = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
         .set_worker_pool(shard_manager(1))
-        .add_event_listener(MessageForwardHandler)
+        .add_event_listener(BufferForwardHandler)
         .build()
         .unwrap();
     let address = server.bind("127.0.0.1:0").unwrap();
@@ -753,7 +753,7 @@ fn thread_channel() {
     thread::spawn(move || {
         channel.write(BytesMut::from(&b"pi"[..])).unwrap();
         channel.flush().unwrap();
-        let sent = channel.send_message(BytesMut::from(&b"ng"[..])).map(|_| "sent").complete();
+        let sent = channel.send_buffer(BytesMut::from(&b"ng"[..])).map(|_| "sent").complete();
         assert_eq!(sent.unwrap(), "sent");
         channel.set_self_deafened(true).unwrap();
         channel.close().unwrap();
@@ -830,7 +830,7 @@ fn thread_queue() {
     let (callback, results) = mpsc::channel();
     let (success, failure) = (callback.clone(), callback);
     let caller = thread::current().id();
-    channel.send_message(BytesMut::from(&b"ping"[..])).queue(
+    channel.send_buffer(BytesMut::from(&b"ping"[..])).queue(
         move |_| {
             success.send((Ok(()), thread::current().id())).ok();
         },
@@ -850,7 +850,7 @@ fn thread_queue() {
     }
     let (callback, results) = mpsc::channel();
     let (success, failure) = (callback.clone(), callback);
-    channel.send_message(BytesMut::from(&b"pong"[..])).queue(
+    channel.send_buffer(BytesMut::from(&b"pong"[..])).queue(
         move |_| {
             success.send((Ok(()), thread::current().id())).ok();
         },
@@ -896,7 +896,7 @@ fn thread_pipeline() {
     let channel = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
     assert!(server.get_channel_by_id::<String, String>(channel.id()).is_some());
     thread::spawn(move || {
-        channel.send_message(String::from("ping")).complete().unwrap();
+        channel.send_buffer(String::from("ping")).complete().unwrap();
         channel.close().unwrap();
     })
     .join()
@@ -940,7 +940,7 @@ fn await_shutdown() {
     let manager = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
         .set_worker_pool(shard_manager(1))
-        .add_event_listener(MessageReceivedAdapter)
+        .add_event_listener(BufferReceivedAdapter)
         .build()
         .unwrap();
     manager.shutdown();
@@ -990,7 +990,7 @@ fn concurrent() {
     let server = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
         .set_worker_pool(shard_manager(1))
-        .add_event_listener(MessageReceivedAdapter)
+        .add_event_listener(BufferReceivedAdapter)
         .build()
         .unwrap();
     let address = server.bind("127.0.0.1:0").unwrap();
@@ -1134,7 +1134,7 @@ fn idle() {
 fn fallback() {
     let server = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
-        .add_event_listener(MessageForwardHandler)
+        .add_event_listener(BufferForwardHandler)
         .build()
         .unwrap();
     let address = server.bind("[::]:0").unwrap();
@@ -1172,7 +1172,7 @@ fn handler() {
 fn builder() {
     let manager = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
-        .add_event_listener(MessageForwardHandler)
+        .add_event_listener(BufferForwardHandler)
         .set_backlog(1)
         .set_concurrency(2)
         .set_buffer_size(3)
@@ -1219,7 +1219,7 @@ fn builder() {
 fn context_map() {
     let manager = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
-        .add_event_listener(MessageForwardHandler)
+        .add_event_listener(BufferForwardHandler)
         .build()
         .unwrap();
     manager.context_map().write().unwrap().insert(String::from("id"), Arc::new(7u32));
@@ -1232,7 +1232,7 @@ fn context_map() {
 fn delay() {
     let server = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
-        .add_event_listener(MessageUpdateHandler)
+        .add_event_listener(BufferUpdateHandler)
         .build()
         .unwrap();
     let address = server.bind("127.0.0.1:0").unwrap();
@@ -1314,7 +1314,7 @@ fn queue() {
     let (sender, receiver) = mpsc::channel();
     let server = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
-        .add_event_listener(MessageCreateHandler)
+        .add_event_listener(BufferCreateHandler)
         .add_event_listener(CallbackContext { close: false, callback: sender.clone() })
         .build()
         .unwrap();
@@ -1342,8 +1342,8 @@ fn queue() {
 fn lock() {
     let server = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
-        .add_event_listener(MessageCreateHandler)
-        .add_event_listener(MessageBulkAdapter)
+        .add_event_listener(BufferCreateHandler)
+        .add_event_listener(BufferBulkAdapter)
         .build()
         .unwrap();
     let address = server.bind("127.0.0.1:0").unwrap();
@@ -1362,7 +1362,7 @@ fn lock() {
 fn bulk() {
     let server = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
-        .add_event_listener(MessageForwardHandler)
+        .add_event_listener(BufferForwardHandler)
         .build()
         .unwrap();
     let address = server.bind("127.0.0.1:0").unwrap();
@@ -1373,7 +1373,7 @@ fn bulk() {
         .set_socket_pool(shard_manager(1))
         .add_event_listener_provider({
             let data = Arc::clone(&data);
-            move || MessageHistoryAdapter {
+            move || BufferHistoryAdapter {
                 payload: Arc::clone(&data),
                 received: Vec::new(),
                 callback: sender.clone(),
@@ -1392,7 +1392,7 @@ fn backpressure() {
         .set_socket_pool(shard_manager(1))
         .set_threshold(16 * 1024)
         .set_large_threshold(64 * 1024)
-        .add_event_listener(MessageForwardSlowmodeAdapter)
+        .add_event_listener(BufferForwardSlowmodeAdapter)
         .build()
         .unwrap();
     let address = server.bind("127.0.0.1:0").unwrap();
@@ -1403,7 +1403,7 @@ fn backpressure() {
         .set_socket_pool(shard_manager(1))
         .add_event_listener_provider({
             let data = Arc::clone(&data);
-            move || MessageHistoryAdapter {
+            move || BufferHistoryAdapter {
                 payload: Arc::clone(&data),
                 received: Vec::new(),
                 callback: sender.clone(),
@@ -1449,7 +1449,7 @@ fn drain() {
         .set_socket_pool(shard_manager(1))
         .set_buffer_size(10)
         .set_chunk_limit(1)
-        .add_event_listener(MessageReceiveAdapter { received: Vec::new(), callback: sender })
+        .add_event_listener(BufferReceiveAdapter { received: Vec::new(), callback: sender })
         .build()
         .unwrap();
     manager.connect(address).unwrap();
@@ -1464,7 +1464,7 @@ fn eof() {
         .set_socket_pool(shard_manager(1))
         .set_buffer_size(10)
         .set_chunk_limit(1)
-        .add_event_listener(MessageReceiveAdapter { received: Vec::new(), callback: sender })
+        .add_event_listener(BufferReceiveAdapter { received: Vec::new(), callback: sender })
         .build()
         .unwrap();
     let address = server.bind("127.0.0.1:0").unwrap();
@@ -1555,7 +1555,7 @@ fn close_pending() {
         .set_socket_pool(shard_manager(1))
         .set_shutdown_timeout(Duration::from_millis(100))
         .add_event_listener(ChannelDisconnectAdapter { callback: sender })
-        .add_event_listener(MessageBulkSendAdapter)
+        .add_event_listener(BufferBulkSendAdapter)
         .build()
         .unwrap();
     manager.connect(listener.local_addr().unwrap()).unwrap();
@@ -1590,7 +1590,7 @@ fn refused() {
 
     let server = DefaultSocketManagerBuilder::new()
         .set_socket_pool(shard_manager(1))
-        .add_event_listener(MessageForwardHandler)
+        .add_event_listener(BufferForwardHandler)
         .build()
         .unwrap();
     manager.connect(server.bind("127.0.0.1:0").unwrap()).unwrap();
@@ -1636,7 +1636,7 @@ fn churn() {
         .set_socket_pool(shard_manager(1))
         .set_worker_pool(shard_manager(2))
         .add_event_listener(ChannelDisconnectAdapter { callback: events })
-        .add_event_listener(MessageForwardHandler)
+        .add_event_listener(BufferForwardHandler)
         .build()
         .unwrap();
     let address = server.bind("127.0.0.1:0").unwrap();
@@ -1647,7 +1647,7 @@ fn churn() {
         .set_socket_pool(shard_manager(1))
         .set_worker_pool(shard_manager(2))
         .add_event_listener(ChannelDisconnectAdapter { callback: events })
-        .add_event_listener_provider(move || MessagePayloadAdapter {
+        .add_event_listener_provider(move || BufferPayloadAdapter {
             received: Vec::new(),
             callback: sender.clone(),
         })
@@ -1673,7 +1673,7 @@ fn rebind() {
     for _ in 0..2 {
         let server = DefaultSocketManagerBuilder::new()
             .set_socket_pool(shard_manager(1))
-            .add_event_listener(MessageForwardHandler)
+            .add_event_listener(BufferForwardHandler)
             .build()
             .unwrap();
         address = server.bind(address).unwrap();

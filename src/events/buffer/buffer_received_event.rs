@@ -18,32 +18,32 @@ use crate::events::{Event, GenericEvent};
 use bytes::BytesMut;
 use std::any::Any;
 
-/// Indicates that a message was received in a [`MessageChannel`].
+/// Indicates that a message was received in a [`BufferedChannel`].
 ///
-/// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
-pub struct MessageReceivedEvent<T = BytesMut> {
-    message: T,
+/// [`BufferedChannel`]: crate::entities::channel::middleman::BufferedChannel
+pub struct BufferReceivedEvent<T = BytesMut> {
+    buffer: T,
 }
 
-impl MessageReceivedEvent {
+impl BufferReceivedEvent {
     pub const IDENTIFIER: usize = 1 << 1;
 }
 
-impl<T> MessageReceivedEvent<T> {
-    pub(crate) fn new(message: T) -> Self {
-        Self { message }
+impl<T> BufferReceivedEvent<T> {
+    pub(crate) fn new(buffer: T) -> Self {
+        Self { buffer }
     }
 
     /// The received message.
-    pub fn message(self) -> T {
-        self.message
+    pub fn buffer(self) -> T {
+        self.buffer
     }
 }
 
-impl<T: Any + Send> GenericEvent for MessageReceivedEvent<T> {}
+impl<T: Any + Send> GenericEvent for BufferReceivedEvent<T> {}
 
-impl<T: Any + Send> Event for MessageReceivedEvent<T> {
+impl<T: Any + Send> Event for BufferReceivedEvent<T> {
     fn identifier(&self) -> usize {
-        MessageReceivedEvent::IDENTIFIER
+        BufferReceivedEvent::IDENTIFIER
     }
 }

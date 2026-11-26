@@ -16,12 +16,12 @@
 
 use crate::events::{Event, GenericEvent};
 
-/// Indicates that a [`MessageChannel`]'s slow mode has been updated.
+/// Indicates that a [`BufferedChannel`]'s slow mode has been updated.
 ///
-/// The new slow mode is returned by [`MessageChannel::is_locked`].
+/// The new slow mode is returned by [`BufferedChannel::is_locked`].
 ///
-/// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
-/// [`MessageChannel::is_locked`]: crate::entities::channel::middleman::MessageChannel::is_locked
+/// [`BufferedChannel`]: crate::entities::channel::middleman::BufferedChannel
+/// [`BufferedChannel::is_locked`]: crate::entities::channel::middleman::BufferedChannel::is_locked
 pub struct ChannelUpdateSlowmodeEvent;
 
 impl ChannelUpdateSlowmodeEvent {

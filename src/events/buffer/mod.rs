@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-//! Events that are fired for messages in a [`MessageChannel`], such as [receiving].
+//! Events that are fired for messages in a [`BufferedChannel`], such as [receiving].
 //!
-//! [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
-//! [receiving]: MessageReceivedEvent
-mod message_received_event;
-pub use message_received_event::MessageReceivedEvent;
+//! [`BufferedChannel`]: crate::entities::channel::middleman::BufferedChannel
+//! [receiving]: BufferReceivedEvent
+mod buffer_received_event;
+pub use buffer_received_event::BufferReceivedEvent;

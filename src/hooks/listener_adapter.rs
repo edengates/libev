@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::entities::channel::middleman::MessageChannel;
+use crate::entities::channel::middleman::BufferedChannel;
 use crate::events::GenericEvent;
 use crate::utils::cast;
 use bytes::BytesMut;
@@ -26,16 +26,16 @@ use std::io;
 ///
 /// Register a [`ListenerAdapter`] with [`add_event_listener_provider`]. Events from the socket reach the listeners in
 /// the order they were registered, and a message written by a listener passes the listeners before it on the way to
-/// the socket. By default every method passes the event or message on through the [`MessageChannel`].
+/// the socket. By default every method passes the event or message on through the [`BufferedChannel`].
 ///
 /// `I` is the type of the messages from the socket side, `O` is the type of the messages for the next listener.
-/// If a method returns an error, the [`MessageChannel`] is closed.
+/// If a method returns an error, the [`BufferedChannel`] is closed.
 ///
 /// [`add_event_listener_provider`]: crate::DefaultSocketManagerBuilder::add_event_listener_provider
 #[allow(async_fn_in_trait)]
 pub trait ListenerAdapter<I: Any + Send = BytesMut, O: Any + Send = BytesMut>: Send {
     /// The channel is connected now.
-    async fn on_ready(&mut self, channel: &mut MessageChannel<O, I>) -> io::Result<()> {
+    async fn on_ready(&mut self, channel: &mut BufferedChannel<O, I>) -> io::Result<()> {
         channel.on_ready();
         Ok(())
     }
@@ -47,20 +47,20 @@ pub trait ListenerAdapter<I: Any + Send = BytesMut, O: Any + Send = BytesMut>: S
     /// By default returns [`InvalidInput`] if `I` and `O` are different types.
     ///
     /// [`InvalidInput`]: io::ErrorKind::InvalidInput
-    async fn on_message_received(&mut self, channel: &mut MessageChannel<O, I>, message: I) -> io::Result<()> {
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel<O, I>, message: I) -> io::Result<()> {
         let message = cast(message).ok_or(io::ErrorKind::InvalidInput)?;
-        channel.on_message_received(message);
+        channel.on_buffer_received(message);
         Ok(())
     }
 
     /// The channel is closed now.
-    async fn on_channel_disconnect(&mut self, channel: &mut MessageChannel<O, I>) -> io::Result<()> {
+    async fn on_channel_disconnect(&mut self, channel: &mut BufferedChannel<O, I>) -> io::Result<()> {
         channel.on_channel_disconnect();
         Ok(())
     }
 
-    /// Gets called once the slow mode of the channel changed. You can check it with [`MessageChannel::is_locked`].
-    async fn on_channel_update_slowmode(&mut self, channel: &mut MessageChannel<O, I>) -> io::Result<()> {
+    /// Gets called once the slow mode of the channel changed. You can check it with [`BufferedChannel::is_locked`].
+    async fn on_channel_update_slowmode(&mut self, channel: &mut BufferedChannel<O, I>) -> io::Result<()> {
         channel.on_channel_update_slowmode();
         Ok(())
     }
@@ -68,13 +68,13 @@ pub trait ListenerAdapter<I: Any + Send = BytesMut, O: Any + Send = BytesMut>: S
     /// Nothing was read or written for the [AFK timeout].
     ///
     /// [AFK timeout]: crate::DefaultSocketManagerBuilder::set_afk_timeout
-    async fn on_channel_timeout(&mut self, channel: &mut MessageChannel<O, I>) -> io::Result<()> {
+    async fn on_channel_timeout(&mut self, channel: &mut BufferedChannel<O, I>) -> io::Result<()> {
         channel.on_channel_timeout();
         Ok(())
     }
 
     /// Handles any other [`GenericEvent`].
-    async fn on_generic_event(&mut self, channel: &mut MessageChannel<O, I>, event: Box<dyn GenericEvent>) -> io::Result<()> {
+    async fn on_generic_event(&mut self, channel: &mut BufferedChannel<O, I>, event: Box<dyn GenericEvent>) -> io::Result<()> {
         channel.on_generic_event(event);
         Ok(())
     }
@@ -88,13 +88,13 @@ pub trait ListenerAdapter<I: Any + Send = BytesMut, O: Any + Send = BytesMut>: S
     ///
     /// [`InvalidInput`]: io::ErrorKind::InvalidInput
     /// [`NotConnected`]: io::ErrorKind::NotConnected
-    async fn write(&mut self, channel: &mut MessageChannel<O, I>, message: O) -> io::Result<()> {
+    async fn write(&mut self, channel: &mut BufferedChannel<O, I>, message: O) -> io::Result<()> {
         let message = cast(message).ok_or(io::ErrorKind::InvalidInput)?;
         channel.write(message)
     }
 
-    /// Handles [`MessageChannel::close`] of the next listener.
-    async fn close(&mut self, channel: &mut MessageChannel<O, I>) -> io::Result<()> {
+    /// Handles [`BufferedChannel::close`] of the next listener.
+    async fn close(&mut self, channel: &mut BufferedChannel<O, I>) -> io::Result<()> {
         channel.close();
         Ok(())
     }

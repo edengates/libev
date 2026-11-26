@@ -14,5 +14,5 @@
  * limitations under the License.
  */
 
-mod message_channel_mixin;
-pub use message_channel_mixin::MessageChannelMixin;
+mod buffered_channel_mixin;
+pub use buffered_channel_mixin::BufferedChannelMixin;

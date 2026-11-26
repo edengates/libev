@@ -16,7 +16,7 @@
 
 use crate::SocketManager;
 use crate::entities::channel::concrete::ThreadChannel;
-use crate::entities::channel::middleman::MessageChannel;
+use crate::entities::channel::middleman::BufferedChannel;
 use crate::utils::{EventManager, EventQueue};
 use crate::utils::Buffer;
 use bytes::BytesMut;
@@ -30,7 +30,7 @@ use std::rc::Rc;
 /// All operations are asynchronous and return immediately, with no guarantee that the request has been completed at
 /// the end of the call.
 ///
-/// [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
+/// [`BufferedChannel`]: crate::entities::channel::middleman::BufferedChannel
 pub trait Sink<T> {
     /// Request to write a message via this channel. This does not request a flush, call
     /// [`flush`](Self::flush) for that.
@@ -104,7 +104,7 @@ impl EventManager for Rc<BufferedSink> {
     }
 
     fn channels(&self, channels: &mut Vec<Box<dyn Any>>) {
-        channels.push(Box::new(MessageChannel::new(
+        channels.push(Box::new(BufferedChannel::new(
             self.socket_manager.clone(),
             Rc::clone(&self.buffer),
             self.thread_channel.clone(),

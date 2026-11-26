@@ -16,53 +16,52 @@
 
 use bytes::BytesMut;
 use libev::DefaultSocketManagerBuilder;
-use libev::entities::channel::middleman::MessageChannel;
+use libev::entities::channel::middleman::BufferedChannel;
 use libev::hooks::ListenerAdapter;
+use libev::requests::sockactions::SocketAction;
 use std::{env, io};
 
 // Every channel uses its own clone of the listener, so it has to implement Clone
 #[derive(Clone)]
-struct MessageLoggerExample;
+struct BufferCreateExample {
+    content: String,
+}
 
-impl ListenerAdapter for MessageLoggerExample {
-    // This overrides the method called on_message_received in the ListenerAdapter trait
-    // Your IDE (such as RustRover) can automatically generate this override for you, by simply typing
-    // "on_message" and auto-completing it!
-    async fn on_message_received(&mut self, _channel: &mut MessageChannel, message: BytesMut) -> io::Result<()> {
-        // The message is the raw bytes received from the socket,
-        // this converts it to a readable string
-        println!("[message] {}", String::from_utf8_lossy(&message));
-        Ok(())
+impl ListenerAdapter for BufferCreateExample {
+    // This overrides the method called on_ready in the ListenerAdapter trait
+    // It gets called once the connection to the address is established
+    async fn on_ready(&mut self, channel: &mut BufferedChannel) -> io::Result<()> {
+        // send_buffer(...) creates a BufferCreateAction, nothing is sent until you queue it
+        // queue(...) adds the message to the channel buffer and calls one of the callbacks with the result
+        channel.send_buffer(BytesMut::from(self.content.as_bytes())).queue(
+            |_| println!("[queued] {}", self.content),
+            |error| eprintln!("The message could not be sent: {}", error),
+        )
     }
 
-    // Gets called once the slow mode of the channel changed, the new slow mode is returned by is_locked()
-    async fn on_channel_update_slowmode(&mut self, channel: &mut MessageChannel) -> io::Result<()> {
-        println!("The channel slow mode is {}", channel.is_locked());
+    // Gets called for every reply of the address, this one prints it and closes the channel
+    async fn on_buffer_received(&mut self, channel: &mut BufferedChannel, message: BytesMut) -> io::Result<()> {
+        println!("[reply] {}", String::from_utf8_lossy(&message));
+        channel.close();
         Ok(())
     }
 }
 
 fn main() -> io::Result<()> {
-    // Possible ways to provide the address:
-
-    // 1. From the command line directly
+    // The address to connect to and the message to send, both can be provided from the command line
     let address = env::args().nth(1).unwrap_or_else(|| String::from("127.0.0.1:8080"));
-
-    // 2. Using environment variable:
-    // let address = env::var("ADDRESS").unwrap();
+    let content = env::args().nth(2).unwrap_or_else(|| String::from("ping"));
 
     // To start the socket manager, you have to use the DefaultSocketManagerBuilder.
     let manager = DefaultSocketManagerBuilder::new()
         // On this builder, you are adding all your event listeners and socket configuration
-        .add_event_listener(MessageLoggerExample)
-        // You can do lots of configuration before starting, checkout all the setters on the
-        // DefaultSocketManagerBuilder struct!
+        .add_event_listener(BufferCreateExample { content })
         // Once you're done configuring your socket manager, call build to start it.
         .build()?;
 
-    // Here you can now start using the socket manager,
-    // bind(...) starts accepting connections on the address and returns the address it is bound to
-    println!("Listening on address: {}", manager.bind(address)?);
+    // connect(...) starts connecting to the address, on_ready is called once the connection is established
+    println!("Connecting to address: {}", address);
+    manager.connect(address.as_str())?;
 
     // The connections are handled on the thread pools, so the main thread can wait here until Enter is pressed
     io::stdin().read_line(&mut String::new())?;

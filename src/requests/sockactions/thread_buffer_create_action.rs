@@ -20,18 +20,18 @@ use std::future::{self, IntoFuture, Ready};
 use std::io;
 
 #[must_use]
-pub struct ThreadMessageCreateAction<'a, N, P> {
+pub struct ThreadBufferCreateAction<'a, N, P> {
     channel: &'a ThreadChannel<N, P>,
     message: P,
 }
 
-impl<'a, N, P> ThreadMessageCreateAction<'a, N, P> {
+impl<'a, N, P> ThreadBufferCreateAction<'a, N, P> {
     pub(crate) fn new(channel: &'a ThreadChannel<N, P>, message: P) -> Self {
         Self { channel, message }
     }
 }
 
-impl<N: 'static, P: Send + 'static> ThreadMessageCreateAction<'_, N, P> {
+impl<N: 'static, P: Send + 'static> ThreadBufferCreateAction<'_, N, P> {
     /// Submits a request for execution without waiting for it.
     ///
     /// The `success` callback will be called at a convenient time, the `failure` callback will be called if the
@@ -49,7 +49,7 @@ impl<N: 'static, P: Send + 'static> ThreadMessageCreateAction<'_, N, P> {
                 let Some(failure) = failure.0.take() else {
                     return;
                 };
-                match channel.send_message(message).complete() {
+                match channel.send_buffer(message).complete() {
                     Ok(data) => success(data),
                     Err(error) => failure(error),
                 }
@@ -68,14 +68,14 @@ impl<F: FnOnce(io::Error)> Drop for Failure<F> {
     }
 }
 
-impl<N: 'static, P: Send + 'static> SocketAction<()> for ThreadMessageCreateAction<'_, N, P> {
+impl<N: 'static, P: Send + 'static> SocketAction<()> for ThreadBufferCreateAction<'_, N, P> {
     fn complete(self) -> io::Result<()> {
         let message = self.message;
-        self.channel.submit(move |channel| channel.send_message(message).complete())
+        self.channel.submit(move |channel| channel.send_buffer(message).complete())
     }
 }
 
-impl<N: 'static, P: Send + 'static> IntoFuture for ThreadMessageCreateAction<'_, N, P> {
+impl<N: 'static, P: Send + 'static> IntoFuture for ThreadBufferCreateAction<'_, N, P> {
     type Output = io::Result<()>;
     type IntoFuture = Ready<io::Result<()>>;
 

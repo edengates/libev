@@ -30,4 +30,4 @@ mod event;
 pub(crate) use event::Event;
 mod generic_event;
 pub use generic_event::GenericEvent;
-pub mod message;
+pub mod buffer;

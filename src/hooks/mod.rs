@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-//! Every [`MessageChannel`] has its registered [`ListenerAdapter`]s that deal with the handling and forwarding of
+//! Every [`BufferedChannel`] has its registered [`ListenerAdapter`]s that deal with the handling and forwarding of
 //! [`GenericEvent`]s.
 //!
-//! All of the [`ListenerAdapter`]s of a [`MessageChannel`] are single-threaded.
+//! All of the [`ListenerAdapter`]s of a [`BufferedChannel`] are single-threaded.
 //!
-//! [`MessageChannel`]: crate::entities::channel::middleman::MessageChannel
+//! [`BufferedChannel`]: crate::entities::channel::middleman::BufferedChannel
 //! [`GenericEvent`]: crate::events::GenericEvent
 mod listener_adapter;
 pub use listener_adapter::ListenerAdapter;
